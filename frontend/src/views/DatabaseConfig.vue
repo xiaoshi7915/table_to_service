@@ -1,18 +1,30 @@
 <template>
   <div class="database-config">
-    <el-card>
+    <el-card class="main-card" shadow="hover">
       <template #header>
         <div class="card-header">
-          <span>数据库连接配置</span>
-          <el-button type="primary" @click="handleAddConfig">
-            <el-icon><Plus /></el-icon>
-            添加配置
-          </el-button>
+          <div class="header-title">
+            <el-icon class="title-icon"><Connection /></el-icon>
+            <span class="title-text">数据源配置</span>
+            <el-tag v-if="configs.length > 0" type="info" size="small" class="count-tag">
+              {{ configs.length }}
+            </el-tag>
+          </div>
+          <div class="header-actions">
+            <el-button type="primary" @click="handleAddConfig" class="action-btn">
+              <el-icon><Plus /></el-icon>
+              添加配置
+            </el-button>
+            <el-button @click="loadConfigs" :loading="loading" class="action-btn">
+              <el-icon><Refresh /></el-icon>
+              刷新
+            </el-button>
+          </div>
         </div>
       </template>
       
       <!-- 空状态 -->
-      <el-empty v-if="configs.length === 0 && !loading" description="暂无数据库配置">
+      <el-empty v-if="configs.length === 0 && !loading" description="暂无数据源配置">
         <el-button type="primary" @click="handleAddConfig">添加配置</el-button>
       </el-empty>
       
@@ -20,8 +32,10 @@
       <el-table 
         v-else
         :data="configs" 
-        style="width: 100%"
+        class="config-table"
         v-loading="loading"
+        stripe
+        :header-cell-style="{ background: '#f5f7fa', color: '#606266', fontWeight: '600' }"
       >
         <el-table-column prop="name" label="配置名称" width="150" />
         <el-table-column prop="host" label="主机" />
@@ -52,6 +66,19 @@
           </template>
         </el-table-column>
       </el-table>
+      
+      <!-- 分页 -->
+      <div v-if="configs.length > 0 || pagination.total > 0" style="margin-top: 20px; display: flex; justify-content: flex-end;">
+        <el-pagination
+          v-model:current-page="pagination.currentPage"
+          v-model:page-size="pagination.pageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="pagination.total"
+          layout="total, sizes, prev, pager, next, jumper"
+          @size-change="handleSizeChange"
+          @current-change="handleCurrentChange"
+        />
+      </div>
     </el-card>
     
     <!-- 配置对话框 -->
@@ -121,7 +148,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Connection } from '@element-plus/icons-vue'
+import { Plus, Connection, Refresh } from '@element-plus/icons-vue'
 import api from '@/api'
 
 const configs = ref([])
@@ -153,15 +180,30 @@ const rules = {
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
 }
 
+const pagination = ref({
+  currentPage: 1,
+  pageSize: 10,
+  total: 0
+})
+
 const loadConfigs = async () => {
   loading.value = true
   try {
-    const response = await api.get('/database-configs')
+    const response = await api.get('/database-configs', {
+      params: {
+        page: pagination.value.currentPage,
+        page_size: pagination.value.pageSize
+      }
+    })
     if (response.data.success) {
       configs.value = (response.data.data || []).map(config => ({
         ...config,
         testing: false
       }))
+      // 更新分页信息
+      if (response.data.pagination) {
+        pagination.value.total = response.data.pagination.total || 0
+      }
     }
   } catch (error) {
     console.error('加载配置失败:', error)
@@ -170,6 +212,17 @@ const loadConfigs = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const handleSizeChange = (val) => {
+  pagination.value.pageSize = val
+  pagination.value.currentPage = 1
+  loadConfigs()
+}
+
+const handleCurrentChange = (val) => {
+  pagination.value.currentPage = val
+  loadConfigs()
 }
 
 const handleAddConfig = () => {
@@ -362,9 +415,53 @@ onMounted(() => {
   padding: 20px;
 }
 
+.main-card {
+  border-radius: 12px;
+  border: 1px solid #e4e7ed;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+}
+
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.header-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.title-icon {
+  font-size: 20px;
+  color: #667eea;
+}
+
+.title-text {
+  font-size: 18px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.count-tag {
+  margin-left: 8px;
+}
+
+.header-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.action-btn {
+  border-radius: 6px;
+}
+
+.config-table {
+  width: 100%;
+}
+
+.config-table :deep(.el-table__row:hover) {
+  background-color: #f5f7fa;
 }
 </style>

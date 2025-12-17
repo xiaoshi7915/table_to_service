@@ -72,7 +72,7 @@ def parse_sql_parameters(sql: str) -> Dict[str, Any]:
             "response_parameters": response_params
         }
     except Exception as e:
-        logger.error(f"解析SQL参数失败: {e}", exc_info=True)
+        logger.error("解析SQL参数失败: {}", e, exc_info=True)
         return {"request_parameters": [], "response_parameters": []}
 
 
@@ -95,7 +95,7 @@ async def parse_sql(
             data=result
         )
     except Exception as e:
-        logger.error(f"解析SQL失败: {e}", exc_info=True)
+        logger.error("解析SQL失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"解析SQL失败: {str(e)}"
@@ -109,7 +109,7 @@ async def list_configs(
     status: Optional[str] = Query(None, description="状态过滤"),
     entry_mode: Optional[str] = Query(None, description="录入模式过滤"),
     page: Optional[int] = Query(1, ge=1, description="页码"),
-    page_size: Optional[int] = Query(10, ge=1, le=100, description="每页数量"),
+    page_size: Optional[int] = Query(10, ge=1, le=1000, description="每页数量"),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_local_db)
 ):
@@ -160,7 +160,7 @@ async def list_configs(
             }
         )
     except Exception as e:
-        logger.error(f"获取接口配置列表失败: {e}", exc_info=True)
+        logger.error("获取接口配置列表失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取接口配置列表失败: {str(e)}"
@@ -193,6 +193,7 @@ async def get_config(
             # 专家模式：从SQL中解析参数
             parsed = parse_sql_parameters(config.sql_statement)
             request_parameters = parsed.get("request_parameters", [])
+            response_parameters = parsed.get("response_parameters", [])
         elif config.entry_mode == "graphical" and config.where_conditions:
             # 图形模式：从WHERE条件中提取参数
             for cond in config.where_conditions:
@@ -204,6 +205,38 @@ async def get_config(
                         "constraint": "required" if cond.get("required", True) else "optional",
                         "location": "query"
                     })
+        
+        # 获取保存的请求参数（从数据库）
+        saved_params = db.query(InterfaceParameter).filter(InterfaceParameter.interface_config_id == config_id).all()
+        saved_request_parameters = []
+        for param in saved_params:
+            saved_request_parameters.append({
+                "name": param.name,
+                "type": param.type,
+                "description": param.description,
+                "constraint": param.constraint,
+                "location": param.location,
+                "default_value": param.default_value
+            })
+        
+        # 如果数据库中没有保存的参数，使用解析的参数
+        if not saved_request_parameters:
+            saved_request_parameters = request_parameters
+        
+        # 获取保存的响应头（从数据库）
+        saved_headers = db.query(InterfaceHeader).filter(
+            InterfaceHeader.interface_config_id == config_id,
+            InterfaceHeader.name.like("Response-%")
+        ).all()
+        response_headers_list = []
+        for header in saved_headers:
+            # 移除Response-前缀
+            header_name = header.name.replace("Response-", "", 1) if header.name.startswith("Response-") else header.name
+            response_headers_list.append({
+                "name": header_name,
+                "value": header.value,
+                "description": header.description or ""
+            })
         
         # 构建返回数据
         result = {
@@ -245,8 +278,18 @@ async def get_config(
             "enable_blacklist": config.enable_blacklist,
             "blacklist_ips": config.blacklist_ips or "",
             "enable_audit_log": config.enable_audit_log,
-            "request_parameters": request_parameters,
+            # 跨域设置
+            "enable_cors": config.enable_cors or False,
+            "cors_allow_origin": config.cors_allow_origin or "",
+            "cors_expose_headers": config.cors_expose_headers or "",
+            "cors_max_age": config.cors_max_age,
+            "cors_allow_methods": config.cors_allow_methods or "",
+            "cors_allow_headers": config.cors_allow_headers or "",
+            "cors_allow_credentials": config.cors_allow_credentials if config.cors_allow_credentials is not None else True,
+            "request_parameters": saved_request_parameters,
             "response_parameters": response_parameters,
+            # 获取保存的响应头
+            "response_headers": response_headers_list,
             "created_at": config.created_at.isoformat() if config.created_at else None,
             "updated_at": config.updated_at.isoformat() if config.updated_at else None
         }
@@ -259,7 +302,7 @@ async def get_config(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"获取接口配置详情失败: {e}", exc_info=True)
+        logger.error("获取接口配置详情失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取接口配置详情失败: {str(e)}"
@@ -333,10 +376,70 @@ async def create_config(
             whitelist_ips=config_data.get("whitelist_ips", ""),
             enable_blacklist=config_data.get("enable_blacklist", False),
             blacklist_ips=config_data.get("blacklist_ips", ""),
-            enable_audit_log=config_data.get("enable_audit_log", False)
+            enable_audit_log=config_data.get("enable_audit_log", False),
+            # 跨域设置
+            enable_cors=config_data.get("enable_cors", False),
+            cors_allow_origin=config_data.get("cors_allow_origin", ""),
+            cors_expose_headers=config_data.get("cors_expose_headers", ""),
+            cors_max_age=config_data.get("cors_max_age"),
+            cors_allow_methods=config_data.get("cors_allow_methods", ""),
+            cors_allow_headers=config_data.get("cors_allow_headers", ""),
+            cors_allow_credentials=config_data.get("cors_allow_credentials", True)
         )
         
         db.add(config)
+        db.flush()  # 先刷新以获取config.id
+        
+        # 处理请求参数（如果提供了）
+        if "request_parameters" in config_data and isinstance(config_data["request_parameters"], list):
+            # 先删除旧的参数
+            db.query(InterfaceParameter).filter(InterfaceParameter.interface_config_id == config.id).delete()
+            # 创建新的参数
+            for param_data in config_data["request_parameters"]:
+                if isinstance(param_data, dict) and param_data.get("name"):
+                    param = InterfaceParameter(
+                        interface_config_id=config.id,
+                        name=param_data.get("name"),
+                        type=param_data.get("type", "string"),
+                        description=param_data.get("description"),
+                        constraint=param_data.get("constraint", "optional"),
+                        location=param_data.get("location", "query"),
+                        default_value=param_data.get("default_value")
+                    )
+                    db.add(param)
+        
+        # 处理响应头（HTTP Response Headers）
+        if "response_headers" in config_data and isinstance(config_data["response_headers"], list):
+            # 先删除旧的响应头（使用InterfaceHeader表，但需要区分类型）
+            # 这里我们使用InterfaceHeader表存储响应头，通过name字段区分
+            try:
+                # 使用synchronize_session=False避免加载对象到会话
+                deleted_count = db.query(InterfaceHeader).filter(
+                    InterfaceHeader.interface_config_id == config.id,
+                    InterfaceHeader.name.like("Response-%")  # 响应头使用Response-前缀
+                ).delete(synchronize_session=False)
+            except Exception as e:
+                # 如果删除失败（可能是表结构问题），记录日志但继续
+                logger.warning("删除旧响应头失败（可能不存在）: {}", e)
+            # 创建新的响应头
+            headers_added = 0
+            for header_data in config_data["response_headers"]:
+                if isinstance(header_data, dict) and header_data.get("name"):
+                    try:
+                        header = InterfaceHeader(
+                            interface_config_id=config.id,
+                            header_type="response",  # 响应头类型
+                            attribute="",  # 属性字段
+                            name=f"Response-{header_data.get('name')}",  # 添加前缀区分响应头
+                            value=header_data.get("value", ""),
+                            description=header_data.get("description", "HTTP响应头")
+                        )
+                        db.add(header)
+                        headers_added += 1
+                    except Exception as e:
+                        logger.error("添加响应头失败: {}", e)
+                        raise
+        
         db.commit()
         db.refresh(config)
         
@@ -349,7 +452,7 @@ async def create_config(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"创建接口配置失败: {e}", exc_info=True)
+        logger.error("创建接口配置失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"创建接口配置失败: {str(e)}"
@@ -373,10 +476,51 @@ async def update_config(
         if not config:
             raise HTTPException(status_code=404, detail="接口配置不存在")
         
-        # 更新字段
+        # 更新字段（排除需要特殊处理的字段）
+        exclude_keys = {"request_parameters", "response_headers"}
         for key, value in config_data.items():
-            if hasattr(config, key):
+            if key not in exclude_keys and hasattr(config, key):
                 setattr(config, key, value)
+        
+        # 处理请求参数（如果提供了）
+        if "request_parameters" in config_data and isinstance(config_data["request_parameters"], list):
+            # 先删除旧的参数
+            db.query(InterfaceParameter).filter(InterfaceParameter.interface_config_id == config_id).delete()
+            # 创建新的参数
+            for param_data in config_data["request_parameters"]:
+                if isinstance(param_data, dict) and param_data.get("name"):
+                    param = InterfaceParameter(
+                        interface_config_id=config_id,
+                        name=param_data.get("name"),
+                        type=param_data.get("type", "string"),
+                        description=param_data.get("description"),
+                        constraint=param_data.get("constraint", "optional"),
+                        location=param_data.get("location", "query"),
+                        default_value=param_data.get("default_value")
+                    )
+                    db.add(param)
+        
+        # 处理响应头（HTTP Response Headers）
+        if "response_headers" in config_data and isinstance(config_data["response_headers"], list):
+            # 先删除旧的响应头
+            db.query(InterfaceHeader).filter(
+                InterfaceHeader.interface_config_id == config_id,
+                InterfaceHeader.name.like("Response-%")
+            ).delete()
+            # 创建新的响应头
+            headers_added = 0
+            for header_data in config_data["response_headers"]:
+                if isinstance(header_data, dict) and header_data.get("name"):
+                    header = InterfaceHeader(
+                        interface_config_id=config_id,
+                        header_type="response",  # 响应头类型
+                        attribute="",  # 属性字段
+                        name=f"Response-{header_data.get('name')}",
+                        value=header_data.get("value", ""),
+                        description=header_data.get("description", "HTTP响应头")
+                    )
+                    db.add(header)
+                    headers_added += 1
         
         db.commit()
         db.refresh(config)
@@ -390,7 +534,7 @@ async def update_config(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"更新接口配置失败: {e}", exc_info=True)
+        logger.error("更新接口配置失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"更新接口配置失败: {str(e)}"
@@ -415,16 +559,19 @@ async def delete_config(
         
         # 先删除关联的参数和请求头（级联删除应该自动处理，但为了确保安全，显式删除）
         try:
-            from models import InterfaceParameter, InterfaceHeader
             # 使用synchronize_session=False避免加载对象到会话
-            db.query(InterfaceParameter).filter(InterfaceParameter.interface_config_id == config_id).delete(synchronize_session=False)
-            db.query(InterfaceHeader).filter(InterfaceHeader.interface_config_id == config_id).delete(synchronize_session=False)
+            deleted_params = db.query(InterfaceParameter).filter(InterfaceParameter.interface_config_id == config_id).delete(synchronize_session=False)
+            deleted_headers = db.query(InterfaceHeader).filter(InterfaceHeader.interface_config_id == config_id).delete(synchronize_session=False)
+            logger.info(f"删除接口配置 {config_id} 的关联数据: {deleted_params} 个参数, {deleted_headers} 个请求头/响应头")
+            db.flush()  # 确保删除操作被提交到数据库
         except Exception as e:
             logger.warning("删除关联数据时出现警告（可能不存在）: {}", e)
+            # 即使删除关联数据失败，也继续删除主配置
         
         # 删除接口配置
         db.delete(config)
         db.commit()
+        logger.info(f"成功删除接口配置 {config_id}")
         
         return ResponseModel(
             success=True,
@@ -511,7 +658,7 @@ async def get_interface_samples(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"获取接口样例数据失败: {e}", exc_info=True)
+        logger.error("获取接口样例数据失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取接口样例数据失败: {str(e)}"
@@ -623,7 +770,7 @@ async def get_interface_api_doc(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"生成API文档失败: {e}", exc_info=True)
+        logger.error("生成API文档失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"生成API文档失败: {str(e)}"

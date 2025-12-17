@@ -161,14 +161,15 @@
                 </el-button>
               </el-form-item>
               
-              <!-- 专家模式显示表名 -->
+              <!-- 专家模式显示表名和字段 -->
               <el-form-item label="数据表" v-if="formData.database_config_id && tables.length > 0">
                 <el-select 
                   v-model="selectedTableForReference" 
-                  placeholder="选择表名作为参考（不影响SQL）"
+                  placeholder="选择表名查看字段信息（不影响SQL）"
                   style="width: 100%;"
                   clearable
                   @change="handleTableSelectForReference"
+                  :loading="loadingTableFields"
                 >
                   <el-option
                     v-for="table in tables"
@@ -178,17 +179,58 @@
                   />
                 </el-select>
                 <div style="font-size: 12px; color: #909399; margin-top: 5px;">
-                  提示：选择表名仅用于参考，不会影响SQL语句
+                  提示：选择表名可查看该表的字段信息，便于编写SQL语句
                 </div>
               </el-form-item>
               
-              <el-form-item v-if="sqlParseResult.request_parameters?.length > 0" label="请求参数">
-                <el-table :data="sqlParseResult.request_parameters" border>
-                  <el-table-column prop="name" label="参数名" />
-                  <el-table-column prop="type" label="类型" />
-                  <el-table-column prop="description" label="描述" />
-                  <el-table-column prop="constraint" label="约束" />
-                  <el-table-column prop="location" label="位置" />
+              <!-- 显示选中表的字段信息 -->
+              <el-form-item v-if="selectedTableForReference && tableFields.length > 0" label="表字段信息">
+                <el-table :data="tableFields" border style="width: 100%;" max-height="300">
+                  <el-table-column prop="name" label="字段名" width="150" />
+                  <el-table-column prop="type" label="类型" width="120" />
+                  <el-table-column prop="nullable" label="可空" width="80">
+                    <template #default="{ row }">
+                      <el-tag :type="row.nullable ? 'info' : 'danger'" size="small">
+                        {{ row.nullable ? '是' : '否' }}
+                      </el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="default" label="默认值" width="120" />
+                  <el-table-column prop="comment" label="注释" min-width="200" />
+                </el-table>
+                <div style="margin-top: 10px;">
+                  <el-button size="small" type="primary" @click="copyTableNameToClipboard">
+                    复制表名到剪贴板
+                  </el-button>
+                  <el-button size="small" type="info" @click="copyAllFieldsToClipboard" style="margin-left: 8px;">
+                    复制所有字段名
+                  </el-button>
+                </div>
+              </el-form-item>
+              
+              <!-- 请求参数映射 -->
+              <el-form-item v-if="sqlParseResult.request_parameters?.length > 0" label="请求参数映射">
+                <el-table :data="sqlParseResult.request_parameters" border style="width: 100%;">
+                  <el-table-column prop="name" label="参数名" width="150" />
+                  <el-table-column prop="type" label="类型" width="100" />
+                  <el-table-column prop="description" label="描述" min-width="150" />
+                  <el-table-column prop="constraint" label="约束" width="100">
+                    <template #default="{ row }">
+                      <el-tag :type="row.constraint === 'required' ? 'danger' : 'info'" size="small">
+                        {{ row.constraint === 'required' ? '必填' : '可选' }}
+                      </el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="location" label="位置" width="100" />
+                </el-table>
+              </el-form-item>
+              
+              <!-- 响应参数映射 -->
+              <el-form-item v-if="sqlParseResult.response_parameters?.length > 0" label="响应参数映射" style="margin-top: 20px;">
+                <el-table :data="sqlParseResult.response_parameters" border style="width: 100%;">
+                  <el-table-column prop="name" label="字段名" width="150" />
+                  <el-table-column prop="type" label="类型" width="150" />
+                  <el-table-column prop="description" label="描述" min-width="200" />
                 </el-table>
               </el-form-item>
             </el-form>
@@ -257,23 +299,27 @@
               </el-form-item>
               
               <el-form-item label="WHERE条件">
-                <div v-for="(condition, index) in formData.where_conditions" :key="index" style="margin-bottom: 12px; padding: 12px; background: #f5f7fa; border-radius: 4px;">
-                  <el-row :gutter="10" style="align-items: center;">
-                    <el-col :span="3">
+                <div v-for="(condition, index) in formData.where_conditions" :key="index" style="margin-bottom: 12px; padding: 16px; background: #f5f7fa; border-radius: 8px; border: 1px solid #e4e7ed;">
+                  <el-row :gutter="12" style="align-items: center;">
+                    <el-col :span="2">
                       <el-select v-model="condition.logic" v-if="index > 0" style="width: 100%;">
                         <el-option label="AND" value="AND" />
                         <el-option label="OR" value="OR" />
                       </el-select>
                       <span v-else style="line-height: 32px; color: #606266; font-weight: 600;">条件</span>
                     </el-col>
-                    <el-col :span="5">
-                      <el-select v-model="condition.field" placeholder="选择字段" style="width: 100%;">
+                    <el-col :span="6">
+                      <el-select v-model="condition.field" placeholder="选择字段" style="width: 100%;" filterable>
                         <el-option
                           v-for="col in tableColumns"
                           :key="col.name"
                           :label="col.comment ? `${col.name} (${col.comment})` : col.name"
                           :value="col.name"
-                        />
+                        >
+                          <span style="display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="col.comment ? `${col.name} (${col.comment})` : col.name">
+                            {{ col.comment ? `${col.name} (${col.comment})` : col.name }}
+                          </span>
+                        </el-option>
                       </el-select>
                     </el-col>
                     <el-col :span="4">
@@ -292,20 +338,23 @@
                         <el-option label="不为空" value="is_not_null" />
                       </el-select>
                     </el-col>
-                    <el-col :span="4">
+                    <el-col :span="3">
                       <el-select v-model="condition.value_type" placeholder="值类型" style="width: 100%;">
                         <el-option label="常量" value="constant" />
                         <el-option label="变量" value="variable" />
                       </el-select>
                     </el-col>
-                    <el-col :span="4" v-if="condition.value_type === 'constant'">
+                    <el-col :span="6" v-if="condition.value_type === 'constant'">
                       <el-input v-model="condition.value" placeholder="常量值" style="width: 100%;" />
                     </el-col>
-                    <el-col :span="4" v-if="condition.value_type === 'variable'">
+                    <el-col :span="6" v-if="condition.value_type === 'variable'">
                       <el-input v-model="condition.variable_name" placeholder="变量名" style="width: 100%;" />
                     </el-col>
-                    <el-col :span="2">
-                      <el-button type="danger" size="small" @click="removeCondition(index)" style="width: 100%;">删除</el-button>
+                    <el-col :span="3">
+                      <el-button type="danger" size="small" @click="removeCondition(index)" style="width: 100%;">
+                        <el-icon><Delete /></el-icon>
+                        删除
+                      </el-button>
                     </el-col>
                   </el-row>
                 </div>
@@ -316,16 +365,20 @@
               </el-form-item>
               
               <el-form-item label="排序字段">
-                <div v-for="(order, index) in formData.order_by_fields" :key="index" style="margin-bottom: 12px; padding: 12px; background: #f5f7fa; border-radius: 4px;">
-                  <el-row :gutter="10" style="align-items: center;">
-                    <el-col :span="10">
-                      <el-select v-model="order.field" placeholder="选择字段" style="width: 100%;">
+                <div v-for="(order, index) in formData.order_by_fields" :key="index" style="margin-bottom: 12px; padding: 16px; background: #f5f7fa; border-radius: 8px; border: 1px solid #e4e7ed;">
+                  <el-row :gutter="12" style="align-items: center;">
+                    <el-col :span="14">
+                      <el-select v-model="order.field" placeholder="选择字段" style="width: 100%;" filterable>
                         <el-option
                           v-for="col in tableColumns"
                           :key="col.name"
                           :label="col.comment ? `${col.name} (${col.comment})` : col.name"
                           :value="col.name"
-                        />
+                        >
+                          <span style="display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="col.comment ? `${col.name} (${col.comment})` : col.name">
+                            {{ col.comment ? `${col.name} (${col.comment})` : col.name }}
+                          </span>
+                        </el-option>
                       </el-select>
                     </el-col>
                     <el-col :span="6">
@@ -335,7 +388,10 @@
                       </el-select>
                     </el-col>
                     <el-col :span="4">
-                      <el-button type="danger" size="small" @click="removeOrder(index)" style="width: 100%;">删除</el-button>
+                      <el-button type="danger" size="small" @click="removeOrder(index)" style="width: 100%;">
+                        <el-icon><Delete /></el-icon>
+                        删除
+                      </el-button>
                     </el-col>
                   </el-row>
                 </div>
@@ -465,15 +521,84 @@
             </el-form-item>
             
             <el-form-item>
-              <el-checkbox v-model="formData.is_options_request">OPTIONS请求</el-checkbox>
+              <el-checkbox v-model="formData.is_options_request">是否开启 OPTIONS 请求</el-checkbox>
             </el-form-item>
             
             <el-form-item>
-              <el-checkbox v-model="formData.is_head_request">HEAD请求</el-checkbox>
+              <el-checkbox v-model="formData.is_head_request">是否开启 HEAD 请求</el-checkbox>
             </el-form-item>
             
             <el-form-item>
               <el-checkbox v-model="formData.define_date_format">定义日期格式</el-checkbox>
+            </el-form-item>
+            
+            <el-divider>跨域设置</el-divider>
+            
+            <el-form-item>
+              <el-checkbox v-model="formData.enable_cors">开启系统跨域</el-checkbox>
+            </el-form-item>
+            
+            <template v-if="formData.enable_cors">
+              <el-form-item label="Access-Control-Allow-Origin" required>
+                <el-input v-model="formData.cors_allow_origin" placeholder="例如: * 或 http://example.com" />
+                <div style="font-size: 12px; color: #909399; margin-top: 5px;">
+                  提示：* 表示允许所有域名，或指定具体域名
+                </div>
+              </el-form-item>
+              
+              <el-form-item label="Access-Control-Expose-Headers">
+                <el-input v-model="formData.cors_expose_headers" placeholder="例如: Content-Length, X-Kuma-Revision" />
+              </el-form-item>
+              
+              <el-form-item label="Access-Control-Max-Age">
+                <el-input-number v-model="formData.cors_max_age" :min="0" :max="86400" placeholder="预检请求缓存时间（秒）" style="width: 100%;" />
+              </el-form-item>
+              
+              <el-form-item label="Access-Control-Allow-Methods" required>
+                <el-input v-model="formData.cors_allow_methods" placeholder="例如: GET, POST, PUT, DELETE, OPTIONS" />
+                <div style="font-size: 12px; color: #909399; margin-top: 5px;">
+                  提示：多个方法用逗号分隔
+                </div>
+              </el-form-item>
+              
+              <el-form-item label="Access-Control-Allow-Headers">
+                <el-input v-model="formData.cors_allow_headers" placeholder="例如: Content-Type, Authorization" />
+              </el-form-item>
+              
+              <el-form-item>
+                <el-checkbox v-model="formData.cors_allow_credentials">Access-Control-Allow-Credentials</el-checkbox>
+              </el-form-item>
+            </template>
+            
+            <el-divider>HTTP Response Header 参数</el-divider>
+            
+            <el-form-item label="响应头列表">
+              <div v-for="(header, index) in formData.response_headers" :key="index" style="margin-bottom: 12px; padding: 16px; background: #f5f7fa; border-radius: 8px; border: 1px solid #e4e7ed;">
+                <el-row :gutter="12" style="align-items: center;">
+                  <el-col :span="6">
+                    <el-input v-model="header.name" placeholder="响应头名称，例如: X-Custom-Header" style="width: 100%;" />
+                  </el-col>
+                  <el-col :span="12">
+                    <el-input v-model="header.value" placeholder="响应头值" style="width: 100%;" />
+                  </el-col>
+                  <el-col :span="4">
+                    <el-input v-model="header.description" placeholder="描述（可选）" style="width: 100%;" />
+                  </el-col>
+                  <el-col :span="2">
+                    <el-button type="danger" size="small" @click="removeResponseHeader(index)" style="width: 100%;">
+                      <el-icon><Delete /></el-icon>
+                      删除
+                    </el-button>
+                  </el-col>
+                </el-row>
+              </div>
+              <el-button type="primary" @click="addResponseHeader" style="width: 100%;">
+                <el-icon><Plus /></el-icon>
+                添加响应头
+              </el-button>
+              <div style="font-size: 12px; color: #909399; margin-top: 8px;">
+                提示：可以添加自定义HTTP响应头，例如 X-Request-ID、X-API-Version 等
+              </div>
             </el-form-item>
           </el-form>
         </el-card>
@@ -488,15 +613,24 @@
           
           <el-form :model="formData" label-width="150px">
             <el-form-item>
-              <el-checkbox v-model="formData.return_total_count">返回总数</el-checkbox>
-            </el-form-item>
-            
-            <el-form-item>
               <el-checkbox v-model="formData.enable_pagination">启用分页</el-checkbox>
+              <div style="font-size: 12px; color: #909399; margin-top: 5px;">
+                提示：启用分页后，接口调用需要传递 pageNumber 和 pageSize 参数
+              </div>
             </el-form-item>
             
-            <el-form-item label="最大查询数量" v-if="formData.enable_pagination">
-              <el-input-number v-model="formData.max_query_count" :min="1" :max="1000" />
+            <el-form-item v-if="formData.enable_pagination">
+              <el-checkbox v-model="formData.return_total_count">返回总数</el-checkbox>
+              <div style="font-size: 12px; color: #909399; margin-top: 5px;">
+                提示：返回总数会增加一次COUNT查询，可能影响性能
+              </div>
+            </el-form-item>
+            
+            <el-form-item label="最大查询数量" v-if="!formData.enable_pagination">
+              <el-input-number v-model="formData.max_query_count" :min="1" :max="10000" style="width: 100%;" />
+              <div style="font-size: 12px; color: #909399; margin-top: 5px;">
+                提示：不分页时，限制单次查询返回的最大记录数
+              </div>
             </el-form-item>
             
             <el-form-item label="超时时间（秒）">
@@ -509,17 +643,20 @@
             
             <el-form-item label="代理认证">
               <el-select v-model="formData.proxy_auth" style="width: 100%;">
-                <el-option label="无需认证" value="no_auth" />
-                <el-option label="Bearer Token" value="bearer" />
-                <el-option label="Basic认证" value="basic" />
+                <el-option label="免验证" value="no_auth" />
+                <el-option label="Basic 验证" value="basic" />
+                <el-option label="Digest 验证" value="digest" />
+                <el-option label="Token 验证" value="token" />
+                <el-option label="一次验证" value="once" />
               </el-select>
             </el-form-item>
             
-            <el-form-item label="加密方法">
+            <el-form-item label="数据加密方式">
               <el-select v-model="formData.encryption_method" style="width: 100%;">
-                <el-option label="不加密" value="no_encryption" />
+                <el-option label="无加密" value="no_encryption" />
+                <el-option label="SM4" value="sm4" />
+                <el-option label="DES" value="des" />
                 <el-option label="AES" value="aes" />
-                <el-option label="RSA" value="rsa" />
               </el-select>
             </el-form-item>
             
@@ -633,7 +770,7 @@
 import { ref, reactive, onMounted, watch, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Document, Grid, Setting, Check, Select, Plus } from '@element-plus/icons-vue'
+import { Document, Grid, Setting, Check, Select, Plus, Delete } from '@element-plus/icons-vue'
 import api from '../api'
 
 const router = useRouter()
@@ -647,6 +784,8 @@ const databaseConfigs = ref([])
 const tables = ref([])
 const tableColumns = ref([])
 const selectedTableForReference = ref('')
+const tableFields = ref([])
+const loadingTableFields = ref(false)
 const sqlParseResult = reactive({
   request_parameters: [],
   response_parameters: []
@@ -689,7 +828,17 @@ const formData = reactive({
   enable_blacklist: false,
   enable_audit_log: false,
   whitelist_ips: '',
-  blacklist_ips: ''
+  blacklist_ips: '',
+  // 跨域设置
+  enable_cors: false,
+  cors_allow_origin: '*',
+  cors_expose_headers: '',
+  cors_max_age: 3600,
+  cors_allow_methods: 'GET, POST, PUT, DELETE, OPTIONS',
+  cors_allow_headers: 'Content-Type, Authorization',
+  cors_allow_credentials: true,
+  // HTTP Response Headers
+  response_headers: []
 })
 
 // 监听数据库变化，加载表列表
@@ -760,10 +909,52 @@ const handleDatabaseChange = () => {
   }
 }
 
-const handleTableSelectForReference = (tableName) => {
-  // 仅用于参考，不设置到formData.table_name
+const handleTableSelectForReference = async (tableName) => {
+  // 选择表后加载字段信息
   if (tableName) {
-    ElMessage.info(`已选择表 "${tableName}" 作为参考，请手动在SQL中使用该表名`)
+    await loadTableFields(tableName)
+  } else {
+    tableFields.value = []
+  }
+}
+
+const loadTableFields = async (tableName) => {
+  if (!formData.database_config_id || !tableName) return
+  
+  loadingTableFields.value = true
+  try {
+    const res = await api.get(`/database-configs/${formData.database_config_id}/tables/${tableName}/info`)
+    if (res.data.success && res.data.data) {
+      tableFields.value = res.data.data.columns || []
+    }
+  } catch (error) {
+    ElMessage.error('加载表字段信息失败: ' + (error.response?.data?.detail || error.message))
+    tableFields.value = []
+  } finally {
+    loadingTableFields.value = false
+  }
+}
+
+const copyTableNameToClipboard = async () => {
+  if (selectedTableForReference.value) {
+    try {
+      await navigator.clipboard.writeText(selectedTableForReference.value)
+      ElMessage.success('表名已复制到剪贴板')
+    } catch (error) {
+      ElMessage.error('复制失败')
+    }
+  }
+}
+
+const copyAllFieldsToClipboard = async () => {
+  if (tableFields.value.length > 0) {
+    const fields = tableFields.value.map(f => f.name).join(', ')
+    try {
+      await navigator.clipboard.writeText(fields)
+      ElMessage.success('所有字段名已复制到剪贴板')
+    } catch (error) {
+      ElMessage.error('复制失败')
+    }
   }
 }
 
@@ -849,6 +1040,18 @@ const addOrder = () => {
 
 const removeOrder = (index) => {
   formData.order_by_fields.splice(index, 1)
+}
+
+const addResponseHeader = () => {
+  formData.response_headers.push({
+    name: '',
+    value: '',
+    description: ''
+  })
+}
+
+const removeResponseHeader = (index) => {
+  formData.response_headers.splice(index, 1)
 }
 
 const previewSql = () => {
@@ -1038,7 +1241,17 @@ const loadConfig = async (configId) => {
         whitelist_ips: config.whitelist_ips || '',
         enable_blacklist: config.enable_blacklist || false,
         blacklist_ips: config.blacklist_ips || '',
-        enable_audit_log: config.enable_audit_log || false
+        enable_audit_log: config.enable_audit_log || false,
+        // 跨域设置
+        enable_cors: config.enable_cors || false,
+        cors_allow_origin: config.cors_allow_origin || '*',
+        cors_expose_headers: config.cors_expose_headers || '',
+        cors_max_age: config.cors_max_age || 3600,
+        cors_allow_methods: config.cors_allow_methods || 'GET, POST, PUT, DELETE, OPTIONS',
+        cors_allow_headers: config.cors_allow_headers || 'Content-Type, Authorization',
+        cors_allow_credentials: config.cors_allow_credentials !== undefined ? config.cors_allow_credentials : true,
+        // HTTP Response Headers
+        response_headers: config.response_headers || []
       })
       
       // 如果是图形模式，加载表信息

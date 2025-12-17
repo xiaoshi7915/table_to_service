@@ -1,9 +1,9 @@
 """
 数据库配置路由
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Body, Query
 from sqlalchemy.orm import Session
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from database import get_local_db
 from models import User, DatabaseConfig
 from schemas import ResponseModel
@@ -38,14 +38,23 @@ router = APIRouter(prefix="/api/v1/database-configs", tags=["数据库配置"])
 @router.get("", response_model=ResponseModel)
 @router.get("/", response_model=ResponseModel)
 async def list_configs(
+    page: Optional[int] = Query(1, ge=1),
+    page_size: Optional[int] = Query(10, ge=1, le=100),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_local_db)
 ):
-    """获取数据库配置列表"""
+    """获取数据库配置列表（支持分页）"""
     try:
-        configs = db.query(DatabaseConfig).filter(
+        query = db.query(DatabaseConfig).filter(
             DatabaseConfig.user_id == current_user.id
-        ).order_by(DatabaseConfig.created_at.desc()).all()
+        ).order_by(DatabaseConfig.created_at.desc())
+        
+        # 获取总数
+        total = query.count()
+        
+        # 分页
+        offset = (page - 1) * page_size
+        configs = query.offset(offset).limit(page_size).all()
         
         result = []
         for config in configs:
@@ -72,7 +81,13 @@ async def list_configs(
         return ResponseModel(
             success=True,
             message="获取成功",
-            data=result
+            data=result,
+            pagination={
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": (total + page_size - 1) // page_size if page_size > 0 else 0
+            }
         )
     except HTTPException:
         raise

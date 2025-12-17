@@ -1,10 +1,16 @@
 <template>
   <div class="api-docs">
-    <el-card>
+    <el-card class="main-card" shadow="hover">
       <template #header>
         <div class="card-header">
-          <span>API接口文档</span>
-          <div>
+          <div class="header-title">
+            <el-icon class="title-icon"><Document /></el-icon>
+            <span class="title-text">API接口文档</span>
+            <el-tag v-if="interfaceList.length > 0" type="info" size="small" class="count-tag">
+              {{ interfaceList.length }}
+            </el-tag>
+          </div>
+          <div class="header-actions">
             <el-button type="primary" @click="handleGenerateAll" :loading="generating">
               <el-icon><DocumentCopy /></el-icon>
               生成全部文档
@@ -17,7 +23,7 @@
               <el-icon><Download /></el-icon>
               导出HTML
             </el-button>
-            <el-button type="success" @click="exportOpenApi" style="margin-left: 10px;">
+            <el-button type="success" @click="exportOpenApi" class="action-btn">
               <el-icon><Download /></el-icon>
               导出OpenAPI
             </el-button>
@@ -26,7 +32,13 @@
       </template>
       
       <!-- 接口列表 -->
-      <el-table :data="interfaceList" border stripe style="width: 100%">
+      <el-table 
+        :data="interfaceList" 
+        class="interface-table"
+        border 
+        stripe 
+        :header-cell-style="{ background: '#f5f7fa', color: '#606266', fontWeight: '600' }"
+      >
         <el-table-column prop="interface_name" label="接口名称" width="200" />
         <el-table-column prop="database_name" label="数据库" width="150" />
         <el-table-column prop="http_method" label="请求方式" width="100">
@@ -181,7 +193,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { DocumentCopy, Download, View } from '@element-plus/icons-vue'
+import { DocumentCopy, Download, View, Document } from '@element-plus/icons-vue'
 import api from '@/api'
 
 const interfaceList = ref([])
@@ -352,10 +364,55 @@ onMounted(() => {
   padding: 20px;
 }
 
+.main-card {
+  border-radius: 12px;
+  border: 1px solid #e4e7ed;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+}
+
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.header-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.title-icon {
+  font-size: 20px;
+  color: #667eea;
+}
+
+.title-text {
+  font-size: 18px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.count-tag {
+  margin-left: 8px;
+}
+
+.header-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.action-btn {
+  border-radius: 6px;
+  margin-left: 10px;
+}
+
+.interface-table {
+  width: 100%;
+}
+
+.interface-table :deep(.el-table__row:hover) {
+  background-color: #f5f7fa;
 }
 
 .code-block {

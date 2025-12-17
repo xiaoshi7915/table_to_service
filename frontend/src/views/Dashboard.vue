@@ -150,11 +150,18 @@ const loadDashboardData = async () => {
       stats.value.databases = dbConfigsRes.data.data?.length || 0
     }
     
-    // 获取接口配置列表
-    const interfacesRes = await api.get('/interface-configs')
+    // 获取接口配置列表（使用分页，但设置较大的page_size以获取全部数据用于统计）
+    const interfacesRes = await api.get('/interface-configs', {
+      params: { page: 1, page_size: 1000 }
+    })
     if (interfacesRes.data.success) {
       const allInterfaces = interfacesRes.data.data || []
-      stats.value.totalInterfaces = allInterfaces.length
+      // 如果返回了分页信息，使用total
+      if (interfacesRes.data.pagination && interfacesRes.data.pagination.total) {
+        stats.value.totalInterfaces = interfacesRes.data.pagination.total
+      } else {
+        stats.value.totalInterfaces = allInterfaces.length
+      }
       stats.value.activeInterfaces = allInterfaces.filter(i => i.status === 'active').length
       stats.value.apiEndpoints = stats.value.activeInterfaces
       

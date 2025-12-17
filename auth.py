@@ -21,7 +21,7 @@ try:
     # 测试bcrypt是否可用
     test_hash = pwd_context.hash("test")
 except Exception as e:
-    logger.warning(f"bcrypt初始化失败，使用sha256_crypt: {e}")
+    logger.warning("bcrypt初始化失败，使用sha256_crypt: {}", e)
     pwd_context = CryptContext(schemes=["sha256_crypt"], deprecated="auto")
 
 # OAuth2密码流

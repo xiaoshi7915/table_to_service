@@ -85,14 +85,23 @@ class InterfaceConfig(Base):
     is_head_request = Column(Boolean, default=False, comment="是否HEAD请求")
     define_date_format = Column(Boolean, default=False, comment="定义日期格式")
     
+    # 跨域设置
+    enable_cors = Column(Boolean, default=False, comment="开启系统跨域")
+    cors_allow_origin = Column(String(500), comment="Access-Control-Allow-Origin")
+    cors_expose_headers = Column(String(500), comment="Access-Control-Expose-Headers")
+    cors_max_age = Column(Integer, comment="Access-Control-Max-Age（秒）")
+    cors_allow_methods = Column(String(200), comment="Access-Control-Allow-Methods")
+    cors_allow_headers = Column(String(500), comment="Access-Control-Allow-Headers")
+    cors_allow_credentials = Column(Boolean, default=True, comment="Access-Control-Allow-Credentials")
+    
     # 风险管控设置
     return_total_count = Column(Boolean, default=False, comment="返回总数")
     enable_pagination = Column(Boolean, default=False, comment="启用分页")
     max_query_count = Column(Integer, default=10, comment="最大查询数量")
     enable_rate_limit = Column(Boolean, default=False, comment="启用限流")
     timeout_seconds = Column(Integer, default=10, comment="超时时间（秒）")
-    proxy_auth = Column(String(50), default="no_auth", comment="代理认证: no_auth/bearer/basic")
-    encryption_method = Column(String(50), default="no_encryption", comment="加密方法")
+    proxy_auth = Column(String(50), default="no_auth", comment="代理认证: no_auth/basic/digest/token/once")
+    encryption_method = Column(String(50), default="no_encryption", comment="加密方法: no_encryption/sm4/des/aes")
     enable_replay_protection = Column(Boolean, default=False, comment="启用重放保护")
     enable_whitelist = Column(Boolean, default=False, comment="启用白名单")
     whitelist_ips = Column(Text, comment="白名单IP地址列表（换行分隔）")
@@ -134,8 +143,10 @@ class InterfaceHeader(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     interface_config_id = Column(Integer, ForeignKey("interface_configs.id", ondelete="CASCADE"), nullable=False, comment="接口配置ID")
-    name = Column(String(100), nullable=False, comment="请求头名称")
-    value = Column(String(500), nullable=False, comment="请求头值")
+    header_type = Column(String(20), nullable=False, default="response", comment="请求头类型")
+    attribute = Column(String(100), nullable=False, default="", comment="属性")
+    name = Column(String(100), nullable=False, default="", comment="请求头名称")
+    value = Column(String(500), nullable=True, comment="请求头值")
     description = Column(Text, comment="描述")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
     

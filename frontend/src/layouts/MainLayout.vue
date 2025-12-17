@@ -17,7 +17,7 @@
         
         <el-menu-item index="/database-config">
           <el-icon><Connection /></el-icon>
-          <span>数据库配置</span>
+          <span>数据源配置</span>
         </el-menu-item>
         
         <el-menu-item index="/interface-list">
@@ -81,7 +81,7 @@ const activeMenu = computed(() => route.path)
 const pageTitle = computed(() => {
   const titles = {
     '/dashboard': '仪表盘',
-    '/database-config': '数据库配置',
+    '/database-config': '数据源配置',
     '/interface-list': '接口清单',
     '/interface-config': '数据表转接口',
     '/api-docs': 'API文档'

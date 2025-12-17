@@ -1,7 +1,8 @@
 """
 接口执行路由
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query, Body, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any
 from database import get_local_db
@@ -33,7 +34,7 @@ def check_rate_limit(interface_config: InterfaceConfig, client_ip: str) -> bool:
     
     # TODO: 实际应该使用Redis实现限流
     # 这里简单返回True，表示通过限流检查
-    logger.info(f"接口 {interface_config.id} 启用限流，客户端IP: {client_ip}")
+    logger.info("接口 {} 启用限流，客户端IP: {}", interface_config.id, client_ip)
     return True
 
 
@@ -59,7 +60,7 @@ def check_whitelist(interface_config: InterfaceConfig, client_ip: str) -> bool:
     
     # 如果没有配置白名单IP，默认拒绝
     if not interface_config.whitelist_ips or not interface_config.whitelist_ips.strip():
-        logger.warning(f"接口 {interface_config.id} 启用白名单但未配置IP地址，拒绝访问")
+        logger.warning("接口 {} 启用白名单但未配置IP地址，拒绝访问", interface_config.id)
         return False
     
     # 解析白名单IP列表（换行分隔）
@@ -68,10 +69,10 @@ def check_whitelist(interface_config: InterfaceConfig, client_ip: str) -> bool:
     # 检查客户端IP是否在白名单中
     for ip_range in whitelist_ips:
         if ip_in_range(client_ip, ip_range):
-            logger.info(f"接口 {interface_config.id} 白名单检查通过，客户端IP: {client_ip} 匹配 {ip_range}")
+            logger.info("接口 {} 白名单检查通过，客户端IP: {} 匹配 {}", interface_config.id, client_ip, ip_range)
             return True
     
-    logger.warning(f"接口 {interface_config.id} 白名单检查失败，客户端IP: {client_ip} 不在白名单中")
+    logger.warning("接口 {} 白名单检查失败，客户端IP: {} 不在白名单中", interface_config.id, client_ip)
     return False
 
 
@@ -90,7 +91,7 @@ def check_blacklist(interface_config: InterfaceConfig, client_ip: str) -> bool:
     # 检查客户端IP是否在黑名单中
     for ip_range in blacklist_ips:
         if ip_in_range(client_ip, ip_range):
-            logger.warning(f"接口 {interface_config.id} 黑名单检查失败，客户端IP: {client_ip} 匹配黑名单 {ip_range}")
+            logger.warning("接口 {} 黑名单检查失败，客户端IP: {} 匹配黑名单 {}", interface_config.id, client_ip, ip_range)
             return False
     
     return True
@@ -143,21 +144,9 @@ def execute_interface_sql(
     """
     执行接口SQL
     """
-    # #region agent log
-    try:
-        with open(r"e:\工作\Coding\local_service\.cursor\debug.log", "a", encoding="utf-8") as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"execute-sql","hypothesisId":"H","location":"interface_executor.py:execute_interface_sql:entry","message":"执行SQL函数入口","data":{"entry_mode":interface_config.entry_mode,"has_sql":bool(interface_config.sql_statement),"enable_pagination":interface_config.enable_pagination},"timestamp":int(time.time()*1000)})+"\n")
-    except: pass
-    # #endregion
     try:
         # 创建数据库连接
         db_url = get_database_connection_url(db_config)
-        # #region agent log
-        try:
-            with open(r"e:\工作\Coding\local_service\.cursor\debug.log", "a", encoding="utf-8") as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"execute-sql","hypothesisId":"H","location":"interface_executor.py:execute_interface_sql:before_engine","message":"创建数据库连接前","data":{"db_url_masked":db_url.split("@")[0].split(":")[0]+":***@"+db_url.split("@")[1] if "@" in db_url else db_url},"timestamp":int(time.time()*1000)})+"\n")
-        except: pass
-        # #endregion
         engine = create_engine(db_url, pool_pre_ping=True)
         SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
         db = SessionLocal()
@@ -168,23 +157,10 @@ def execute_interface_sql(
             
             # 如果是图形模式，需要构建SQL
             if interface_config.entry_mode == "graphical":
-                # #region agent log
-                try:
-                    with open(r"e:\工作\Coding\local_service\.cursor\debug.log", "a", encoding="utf-8") as f:
-                        f.write(json.dumps({"sessionId":"debug-session","runId":"execute-sql","hypothesisId":"I","location":"interface_executor.py:execute_interface_sql:graphical_mode","message":"图形模式，构建SQL","data":{"table_name":interface_config.table_name,"selected_fields":interface_config.selected_fields},"timestamp":int(time.time()*1000)})+"\n")
-                except: pass
-                # #endregion
                 sql = build_sql_from_graphical_config(interface_config, params)
             else:
                 # 专家模式：使用配置的SQL语句
                 sql = interface_config.sql_statement
-            
-            # #region agent log
-            try:
-                with open(r"e:\工作\Coding\local_service\.cursor\debug.log", "a", encoding="utf-8") as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"execute-sql","hypothesisId":"I","location":"interface_executor.py:execute_interface_sql:sql_check","message":"SQL语句检查","data":{"has_sql":bool(sql),"sql_length":len(sql) if sql else 0,"entry_mode":interface_config.entry_mode},"timestamp":int(time.time()*1000)})+"\n")
-            except: pass
-            # #endregion
             
             if not sql:
                 raise ValueError("SQL语句为空")
@@ -200,8 +176,8 @@ def execute_interface_sql(
                         else:
                             sql = sql.replace(placeholder, str(value))
             
-            # 检查最大查询数量限制
-            if interface_config.max_query_count:
+            # 检查最大查询数量限制（仅在非分页模式下应用）
+            if not interface_config.enable_pagination and interface_config.max_query_count:
                 # 添加LIMIT限制
                 if "LIMIT" not in sql.upper():
                     sql = f"{sql} LIMIT {interface_config.max_query_count}"
@@ -213,23 +189,9 @@ def execute_interface_sql(
                     "params": params
                 })
             
-            # #region agent log
-            try:
-                with open(r"e:\工作\Coding\local_service\.cursor\debug.log", "a", encoding="utf-8") as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"execute-sql","hypothesisId":"J","location":"interface_executor.py:execute_interface_sql:before_execute","message":"执行SQL前","data":{"sql_preview":sql[:200] if sql else None},"timestamp":int(time.time()*1000)})+"\n")
-            except: pass
-            # #endregion
-            
             # 执行查询
             result = db.execute(text(sql))
             rows = result.fetchall()
-            
-            # #region agent log
-            try:
-                with open(r"e:\工作\Coding\local_service\.cursor\debug.log", "a", encoding="utf-8") as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"execute-sql","hypothesisId":"J","location":"interface_executor.py:execute_interface_sql:after_execute","message":"执行SQL后","data":{"row_count":len(rows)},"timestamp":int(time.time()*1000)})+"\n")
-            except: pass
-            # #endregion
             
             # 转换为字典列表，处理特殊类型（datetime, decimal等）
             columns = result.keys()
@@ -264,28 +226,35 @@ def execute_interface_sql(
             # 如果需要返回总数，执行COUNT查询
             total_count = total
             if interface_config.return_total_count:
-                count_sql = f"SELECT COUNT(*) as total FROM ({sql}) as subquery"
+                # 构建COUNT查询（使用原始SQL，不包含LIMIT）
+                count_sql = sql
+                # 移除LIMIT子句（如果存在）
+                import re
+                count_sql = re.sub(r'\s+LIMIT\s+\d+(\s+OFFSET\s+\d+)?', '', count_sql, flags=re.IGNORECASE)
+                count_sql = f"SELECT COUNT(*) as total FROM ({count_sql}) as subquery"
                 count_result = db.execute(text(count_sql))
                 total_count = count_result.scalar() or total
             
-            return {
+            # 构建返回结果
+            result = {
                 "data": data,
-                "count": len(data),
-                "total": total_count,
-                "page": page or 1,
-                "page_size": page_size or len(data)
+                "count": len(data)
             }
+            
+            # 如果启用分页或返回总数，添加分页信息
+            if interface_config.enable_pagination:
+                result["pageNumber"] = page or 1
+                result["pageSize"] = page_size or len(data)
+            
+            if interface_config.return_total_count:
+                result["total"] = total_count
+            
+            return result
         finally:
             db.close()
             engine.dispose()
     except Exception as e:
-        # #region agent log
-        try:
-            with open(r"e:\工作\Coding\local_service\.cursor\debug.log", "a", encoding="utf-8") as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"execute-sql","hypothesisId":"K","location":"interface_executor.py:execute_interface_sql:exception","message":"执行SQL异常","data":{"error_type":type(e).__name__,"error_message":str(e)},"timestamp":int(time.time()*1000)})+"\n")
-        except: pass
-        # #endregion
-        logger.error(f"执行接口SQL失败: {e}", exc_info=True)
+        logger.error("执行接口SQL失败: {}", e, exc_info=True)
         raise
 
 
@@ -316,13 +285,6 @@ def build_sql_from_graphical_config(interface_config: InterfaceConfig, params: D
     # 为表名添加反引号
     escaped_table_name = escape_identifier(table_name)
     sql = f"SELECT {fields} FROM {escaped_table_name}"
-    
-    # #region agent log
-    try:
-        with open(r"e:\工作\Coding\local_service\.cursor\debug.log", "a", encoding="utf-8") as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"execute-sql","hypothesisId":"L","location":"interface_executor.py:build_sql_from_graphical_config:after_build","message":"构建SQL后","data":{"sql_preview":sql[:200] if sql else None},"timestamp":int(time.time()*1000)})+"\n")
-    except: pass
-    # #endregion
     
     # 构建WHERE子句
     where_conditions = interface_config.where_conditions or []
@@ -427,18 +389,15 @@ def build_sql_from_graphical_config(interface_config: InterfaceConfig, params: D
 async def execute_interface_get(
     config_id: int,
     request: Request,
-    page: Optional[int] = Query(1, ge=1),
-    page_size: Optional[int] = Query(10, ge=1, le=100),
+    pageNumber: Optional[int] = Query(None, ge=1, alias="pageNumber"),
+    pageSize: Optional[int] = Query(None, ge=1, le=1000, alias="pageSize"),
+    # 兼容旧参数名
+    page: Optional[int] = Query(None, ge=1),
+    page_size: Optional[int] = Query(None, ge=1, le=1000),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_local_db)
 ):
     """执行接口（GET请求）"""
-    # #region agent log
-    try:
-        with open(r"e:\工作\Coding\local_service\.cursor\debug.log", "a", encoding="utf-8") as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"execute-interface","hypothesisId":"A","location":"interface_executor.py:execute_interface_get:entry","message":"函数入口","data":{"config_id":config_id,"user_id":current_user.id,"page":page,"page_size":page_size},"timestamp":int(__import__("time").time()*1000)})+"\n")
-    except: pass
-    # #endregion
     try:
         # 获取接口配置
         interface_config = db.query(InterfaceConfig).filter(
@@ -446,24 +405,11 @@ async def execute_interface_get(
             InterfaceConfig.user_id == current_user.id
         ).first()
         
-        # #region agent log
-        try:
-            with open(r"e:\工作\Coding\local_service\.cursor\debug.log", "a", encoding="utf-8") as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"execute-interface","hypothesisId":"B","location":"interface_executor.py:execute_interface_get:after_query","message":"查询接口配置后","data":{"config_exists":interface_config is not None,"status":interface_config.status if interface_config else None,"entry_mode":interface_config.entry_mode if interface_config else None,"table_name":interface_config.table_name if interface_config else None,"database_config_id":interface_config.database_config_id if interface_config else None},"timestamp":int(__import__("time").time()*1000)})+"\n")
-        except: pass
-        # #endregion
-        
         if not interface_config:
             raise HTTPException(status_code=404, detail="接口配置不存在")
         
         # 允许执行草稿状态的接口（用于测试），但禁用状态的接口不能执行
         if interface_config.status == "inactive":
-            # #region agent log
-            try:
-                with open(r"e:\工作\Coding\local_service\.cursor\debug.log", "a", encoding="utf-8") as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"execute-interface","hypothesisId":"C","location":"interface_executor.py:execute_interface_get:status_check","message":"接口状态检查失败","data":{"status":interface_config.status},"timestamp":int(__import__("time").time()*1000)})+"\n")
-            except: pass
-            # #endregion
             raise HTTPException(status_code=400, detail="接口已禁用，无法执行。请将接口状态设置为'激活'或'草稿'")
         
         # 检查图形模式下的必要字段
@@ -479,13 +425,6 @@ async def execute_interface_get(
             DatabaseConfig.id == interface_config.database_config_id
         ).first()
         
-        # #region agent log
-        try:
-            with open(r"e:\工作\Coding\local_service\.cursor\debug.log", "a", encoding="utf-8") as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"execute-interface","hypothesisId":"D","location":"interface_executor.py:execute_interface_get:after_db_query","message":"查询数据库配置后","data":{"db_config_exists":db_config is not None},"timestamp":int(__import__("time").time()*1000)})+"\n")
-        except: pass
-        # #endregion
-        
         if not db_config:
             raise HTTPException(status_code=404, detail="数据库配置不存在")
         
@@ -499,54 +438,93 @@ async def execute_interface_get(
         
         # 获取查询参数
         params = dict(request.query_params)
-        # 移除分页参数
-        params.pop("page", None)
-        params.pop("page_size", None)
         
-        # #region agent log
-        try:
-            with open(r"e:\工作\Coding\local_service\.cursor\debug.log", "a", encoding="utf-8") as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"execute-interface","hypothesisId":"E","location":"interface_executor.py:execute_interface_get:before_execute","message":"执行SQL前","data":{"params":params,"enable_pagination":interface_config.enable_pagination,"entry_mode":interface_config.entry_mode},"timestamp":int(__import__("time").time()*1000)})+"\n")
-        except: pass
-        # #endregion
+        # 处理分页参数：优先使用 pageNumber/pageSize，兼容 page/page_size
+        actual_page = pageNumber if pageNumber is not None else page
+        actual_page_size = pageSize if pageSize is not None else page_size
+        
+        # 如果启用分页，使用分页参数；否则使用最大查询数量限制
+        if interface_config.enable_pagination:
+            # 分页模式：使用 pageNumber 和 pageSize
+            if actual_page is None:
+                actual_page = 1
+            if actual_page_size is None:
+                actual_page_size = 10
+            # 移除分页参数，避免传递给SQL
+            params.pop("pageNumber", None)
+            params.pop("pageSize", None)
+            params.pop("page", None)
+            params.pop("page_size", None)
+        else:
+            # 非分页模式：使用 max_query_count 限制
+            actual_page = None
+            actual_page_size = None
+            # 移除分页参数
+            params.pop("pageNumber", None)
+            params.pop("pageSize", None)
+            params.pop("page", None)
+            params.pop("page_size", None)
         
         # 执行SQL
         result = execute_interface_sql(
             interface_config,
             db_config,
             params,
-            page if interface_config.enable_pagination else None,
-            page_size if interface_config.enable_pagination else None
+            actual_page,
+            actual_page_size
         )
         
-        # #region agent log
-        try:
-            with open(r"e:\工作\Coding\local_service\.cursor\debug.log", "a", encoding="utf-8") as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"execute-interface","hypothesisId":"E","location":"interface_executor.py:execute_interface_get:after_execute","message":"执行SQL后","data":{"result_keys":list(result.keys()) if isinstance(result, dict) else "not_dict","has_data":bool(result.get("data")) if isinstance(result, dict) else False},"timestamp":int(__import__("time").time()*1000)})+"\n")
-        except: pass
-        # #endregion
-        
-        return ResponseModel(
+        # 构建响应
+        response_data = ResponseModel(
             success=True,
             message="执行成功",
             data=result
         )
-    except HTTPException as e:
-        # #region agent log
+        
+        # 构建响应头
+        headers = {}
+        
+        # 如果启用了跨域，添加CORS响应头
+        if interface_config.enable_cors:
+            if interface_config.cors_allow_origin:
+                headers["Access-Control-Allow-Origin"] = interface_config.cors_allow_origin
+            if interface_config.cors_expose_headers:
+                headers["Access-Control-Expose-Headers"] = interface_config.cors_expose_headers
+            if interface_config.cors_max_age:
+                headers["Access-Control-Max-Age"] = str(interface_config.cors_max_age)
+            if interface_config.cors_allow_methods:
+                headers["Access-Control-Allow-Methods"] = interface_config.cors_allow_methods
+            if interface_config.cors_allow_headers:
+                headers["Access-Control-Allow-Headers"] = interface_config.cors_allow_headers
+            if interface_config.cors_allow_credentials is not None:
+                headers["Access-Control-Allow-Credentials"] = "true" if interface_config.cors_allow_credentials else "false"
+        
+        # 添加自定义HTTP响应头
         try:
-            with open(r"e:\工作\Coding\local_service\.cursor\debug.log", "a", encoding="utf-8") as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"execute-interface","hypothesisId":"F","location":"interface_executor.py:execute_interface_get:http_exception","message":"HTTP异常","data":{"status_code":e.status_code,"detail":e.detail},"timestamp":int(__import__("time").time()*1000)})+"\n")
-        except: pass
-        # #endregion
+            from models import InterfaceHeader
+            response_headers = db.query(InterfaceHeader).filter(
+                InterfaceHeader.interface_config_id == interface_config.id,
+                InterfaceHeader.name.like("Response-%")
+            ).all()
+            for header in response_headers:
+                # 移除Response-前缀
+                header_name = header.name.replace("Response-", "", 1) if header.name.startswith("Response-") else header.name
+                headers[header_name] = header.value
+        except Exception as e:
+            logger.warning("获取响应头失败: {}", e)
+        
+        # 如果有响应头，返回JSONResponse，否则返回普通ResponseModel
+        if headers:
+            return JSONResponse(
+                content=response_data.dict(),
+                headers=headers
+            )
+        
+        return response_data
+    except HTTPException as e:
         raise
     except Exception as e:
-        # #region agent log
-        try:
-            with open(r"e:\工作\Coding\local_service\.cursor\debug.log", "a", encoding="utf-8") as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"execute-interface","hypothesisId":"G","location":"interface_executor.py:execute_interface_get:exception","message":"执行异常","data":{"error_type":type(e).__name__,"error_message":str(e)},"timestamp":int(__import__("time").time()*1000)})+"\n")
-        except: pass
-        # #endregion
-        logger.error(f"执行接口失败: {e}", exc_info=True)
+        logger.error("执行接口失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"执行接口失败: {str(e)}"
@@ -558,8 +536,11 @@ async def execute_interface_post(
     config_id: int,
     request: Request,
     body: Dict[str, Any] = Body(None),
-    page: Optional[int] = Query(1, ge=1),
-    page_size: Optional[int] = Query(10, ge=1, le=100),
+    pageNumber: Optional[int] = Query(None, ge=1, alias="pageNumber"),
+    pageSize: Optional[int] = Query(None, ge=1, le=1000, alias="pageSize"),
+    # 兼容旧参数名
+    page: Optional[int] = Query(None, ge=1),
+    page_size: Optional[int] = Query(None, ge=1, le=1000),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_local_db)
 ):
@@ -573,13 +554,6 @@ async def execute_interface_post(
         
         if not interface_config:
             raise HTTPException(status_code=404, detail="接口配置不存在")
-        
-        # #region agent log
-        try:
-            with open(r"e:\工作\Coding\local_service\.cursor\debug.log", "a", encoding="utf-8") as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"execute-interface-post","hypothesisId":"A","location":"interface_executor.py:execute_interface_post:after_query","message":"查询接口配置后","data":{"config_exists":interface_config is not None,"status":interface_config.status if interface_config else None,"entry_mode":interface_config.entry_mode if interface_config else None,"table_name":interface_config.table_name if interface_config else None,"database_config_id":interface_config.database_config_id if interface_config else None},"timestamp":int(__import__("time").time()*1000)})+"\n")
-        except: pass
-        # #endregion
         
         # 允许执行草稿状态的接口（用于测试），但禁用状态的接口不能执行
         if interface_config.status == "inactive":
@@ -624,11 +598,37 @@ async def execute_interface_post(
             except:
                 raise HTTPException(status_code=401, detail="需要认证")
         
-        # 获取参数（从请求体）
+        # 获取参数（从请求体和query params）
         params = body or {}
-        # 移除分页参数
-        params.pop("page", None)
-        params.pop("page_size", None)
+        # 合并query参数
+        query_params = dict(request.query_params)
+        params.update(query_params)
+        
+        # 处理分页参数：优先使用 pageNumber/pageSize，兼容 page/page_size
+        actual_page = pageNumber if pageNumber is not None else page
+        actual_page_size = pageSize if pageSize is not None else page_size
+        
+        # 如果启用分页，使用分页参数；否则使用最大查询数量限制
+        if interface_config.enable_pagination:
+            # 分页模式：使用 pageNumber 和 pageSize
+            if actual_page is None:
+                actual_page = 1
+            if actual_page_size is None:
+                actual_page_size = 10
+            # 移除分页参数，避免传递给SQL
+            params.pop("pageNumber", None)
+            params.pop("pageSize", None)
+            params.pop("page", None)
+            params.pop("page_size", None)
+        else:
+            # 非分页模式：使用 max_query_count 限制
+            actual_page = None
+            actual_page_size = None
+            # 移除分页参数
+            params.pop("pageNumber", None)
+            params.pop("pageSize", None)
+            params.pop("page", None)
+            params.pop("page_size", None)
         
         # 执行SQL（带超时控制）
         import threading
@@ -643,8 +643,8 @@ async def execute_interface_post(
                     interface_config,
                     db_config,
                     params,
-                    page if interface_config.enable_pagination else None,
-                    page_size if interface_config.enable_pagination else None,
+                    actual_page,
+                    actual_page_size,
                     client_ip,
                     current_user.id if current_user else None
                 )
@@ -669,21 +669,63 @@ async def execute_interface_post(
                 interface_config,
                 db_config,
                 params,
-                page if interface_config.enable_pagination else None,
-                page_size if interface_config.enable_pagination else None,
+                actual_page,
+                actual_page_size,
                 client_ip,
                 current_user.id if current_user else None
             )
         
-        return ResponseModel(
+        # 构建响应
+        response_data = ResponseModel(
             success=True,
             message="执行成功",
             data=result
         )
+        
+        # 构建响应头
+        headers = {}
+        
+        # 如果启用了跨域，添加CORS响应头
+        if interface_config.enable_cors:
+            if interface_config.cors_allow_origin:
+                headers["Access-Control-Allow-Origin"] = interface_config.cors_allow_origin
+            if interface_config.cors_expose_headers:
+                headers["Access-Control-Expose-Headers"] = interface_config.cors_expose_headers
+            if interface_config.cors_max_age:
+                headers["Access-Control-Max-Age"] = str(interface_config.cors_max_age)
+            if interface_config.cors_allow_methods:
+                headers["Access-Control-Allow-Methods"] = interface_config.cors_allow_methods
+            if interface_config.cors_allow_headers:
+                headers["Access-Control-Allow-Headers"] = interface_config.cors_allow_headers
+            if interface_config.cors_allow_credentials is not None:
+                headers["Access-Control-Allow-Credentials"] = "true" if interface_config.cors_allow_credentials else "false"
+        
+        # 添加自定义HTTP响应头
+        try:
+            from models import InterfaceHeader
+            response_headers = db.query(InterfaceHeader).filter(
+                InterfaceHeader.interface_config_id == interface_config.id,
+                InterfaceHeader.name.like("Response-%")
+            ).all()
+            for header in response_headers:
+                # 移除Response-前缀
+                header_name = header.name.replace("Response-", "", 1) if header.name.startswith("Response-") else header.name
+                headers[header_name] = header.value
+        except Exception as e:
+            logger.warning("获取响应头失败: {}", e)
+        
+        # 如果有响应头，返回JSONResponse，否则返回普通ResponseModel
+        if headers:
+            return JSONResponse(
+                content=response_data.dict(),
+                headers=headers
+            )
+        
+        return response_data
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"执行接口失败: {e}", exc_info=True)
+        logger.error("执行接口失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"执行接口失败: {str(e)}"

@@ -147,17 +147,23 @@ async def get_full_interface_doc(
                     response_sample["data"]["count"] = 1
                     response_sample["data"]["total"] = 1
     
-    # 获取服务器地址和端口
+    # 获取服务器地址和端口（固定为8888端口，路径前加/api）
     host_header = request.headers.get("host") if request else None
     if host_header:
-        host = host_header
+        # 从host header中提取主机名（去掉端口）
+        hostname = host_header.split(":")[0] if ":" in host_header else host_header
         scheme = "https" if (request and request.headers.get("x-forwarded-proto") == "https") else "http"
     else:
-        host = f"{settings.HOST}:{settings.PORT}" if settings.HOST != "0.0.0.0" else f"localhost:{settings.PORT}"
+        hostname = settings.HOST if settings.HOST != "0.0.0.0" else "localhost"
         scheme = config.proxy_schemes or "http"
     
-    base_url = f"{scheme}://{host}"
+    # 固定端口为8888，路径前加/api
+    api_port = 8888
+    base_url = f"{scheme}://{hostname}:{api_port}"
     proxy_path = config.proxy_path if config.proxy_path.startswith("/") else f"/{config.proxy_path}"
+    # 确保路径以/api开头
+    if not proxy_path.startswith("/api"):
+        proxy_path = f"/api{proxy_path}"
     full_url = f"{base_url}{proxy_path}"
     
     return {
