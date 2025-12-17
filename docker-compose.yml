@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    container_name: table-service-api
+    ports:
+      - "5001:5001"
+    environment:
+      - LOCAL_DB_HOST=${LOCAL_DB_HOST:-mysql}
+      - LOCAL_DB_PORT=${LOCAL_DB_PORT:-3306}
+      - LOCAL_DB_USER=${LOCAL_DB_USER:-root}
+      - LOCAL_DB_PASSWORD=${LOCAL_DB_PASSWORD}
+      - LOCAL_DB_NAME=${LOCAL_DB_NAME:-local_service_db}
+      - SECRET_KEY=${SECRET_KEY:-change-this-in-production}
+      - ALGORITHM=${ALGORITHM:-HS256}
+      - API_HOST=0.0.0.0
+      - API_PORT=5001
+      - DEBUG=${DEBUG:-False}
+    volumes:
+      - ./logs:/app/logs
+      - ./.env:/app/.env
+    restart: unless-stopped
+    depends_on:
+      - mysql
+    networks:
+      - app-network
+
+  mysql:
+    image: mysql:8.0
+    container_name: table-service-mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=${LOCAL_DB_PASSWORD:-rootpassword}
+      - MYSQL_DATABASE=${LOCAL_DB_NAME:-local_service_db}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    restart: unless-stopped
+    networks:
+      - app-network
+
+volumes:
+  mysql-data:
+
+networks:
+  app-network:
+    driver: bridge
+
