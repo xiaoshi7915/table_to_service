@@ -6,14 +6,14 @@ from starlette.requests import Request
 from fastapi.responses import Response, JSONResponse, FileResponse
 from sqlalchemy.orm import Session
 from typing import Dict, Any, List, Optional
-from database import get_local_db
-from schemas import ResponseModel
-from auth import get_current_active_user
-from models import User, InterfaceConfig, DatabaseConfig
+from app.core.database import get_local_db
+from app.schemas import ResponseModel
+from app.core.security import get_current_active_user
+from app.models import User, InterfaceConfig, DatabaseConfig
 from loguru import logger
 import json
 from datetime import datetime
-from config import settings
+from app.core.config import settings
 
 router = APIRouter(prefix="/api/v1/api-docs", tags=["API文档"])
 
@@ -60,7 +60,7 @@ async def get_full_interface_doc(
 ) -> Dict[str, Any]:
     """获取完整的接口文档信息（包含所有元数据）"""
     # 获取请求参数和样例数据
-    import routers.interface_configs as interface_configs_module
+    from app.api.v1 import interface_configs as interface_configs_module
     parse_sql_parameters = interface_configs_module.parse_sql_parameters
     
     request_parameters = []
@@ -106,7 +106,7 @@ async def get_full_interface_doc(
     
     # 尝试实际执行接口获取真实响应数据作为示例
     try:
-        from routers.interface_executor import execute_interface_sql
+        from app.api.v1.interface_executor import execute_interface_sql
         real_result = execute_interface_sql(
             config,
             db_config,
@@ -125,7 +125,7 @@ async def get_full_interface_doc(
                 "page_size": real_result.get("page_size", 1)
             }
     except Exception as e:
-        logger.warning(f"获取真实响应数据失败，使用默认示例: {e}")
+        logger.warning("获取真实响应数据失败，使用默认示例: {}", e)
         if config.entry_mode == "graphical" and config.selected_fields:
             sample_row = {}
             for field in config.selected_fields:
@@ -247,7 +247,7 @@ async def list_interface_docs(
             }
         )
     except Exception as e:
-        logger.error(f"获取接口文档列表失败: {e}", exc_info=True)
+        logger.error("获取接口文档列表失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取接口文档列表失败: {str(e)}"
@@ -282,7 +282,7 @@ async def get_interface_doc(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"获取接口文档失败: {e}", exc_info=True)
+        logger.error("获取接口文档失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取接口文档失败: {str(e)}"
@@ -307,7 +307,7 @@ async def generate_all_docs(
             data={"count": count}
         )
     except Exception as e:
-        logger.error(f"生成文档失败: {e}", exc_info=True)
+        logger.error("生成文档失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"生成文档失败: {str(e)}"
@@ -399,7 +399,7 @@ async def export_markdown(
             headers={"Content-Disposition": f"attachment; filename=api-docs-{datetime.now().strftime('%Y%m%d')}.md"}
         )
     except Exception as e:
-        logger.error(f"导出Markdown文档失败: {e}", exc_info=True)
+        logger.error("导出Markdown文档失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"导出Markdown文档失败: {str(e)}"
@@ -546,7 +546,7 @@ async def export_html(
             headers={"Content-Disposition": f"attachment; filename=api-docs-{datetime.now().strftime('%Y%m%d')}.html"}
         )
     except Exception as e:
-        logger.error(f"导出HTML文档失败: {e}", exc_info=True)
+        logger.error("导出HTML文档失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"导出HTML文档失败: {str(e)}"
@@ -713,7 +713,7 @@ async def export_openapi(
             headers={"Content-Disposition": f"attachment; filename=openapi-{datetime.now().strftime('%Y%m%d')}.json"}
         )
     except Exception as e:
-        logger.error(f"导出OpenAPI文档失败: {e}", exc_info=True)
+        logger.error("导出OpenAPI文档失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"导出OpenAPI文档失败: {str(e)}"

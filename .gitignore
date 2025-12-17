@@ -49,6 +49,14 @@ debug.log
 # Migration scripts (keep only the latest ones)
 migrate_*.py
 
+# Backend specific
+backend/logs/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/.env
+backend/.env.local
+backend/update_imports.py
+
 # Temporary files
 *.tmp
 *.bak

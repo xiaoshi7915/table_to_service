@@ -4,10 +4,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import Optional, List, Dict, Any
-from database import get_local_db
-from models import User, InterfaceConfig, InterfaceParameter, InterfaceHeader, DatabaseConfig
-from schemas import ResponseModel
-from auth import get_current_active_user
+from app.core.database import get_local_db
+from app.models import User, InterfaceConfig, InterfaceParameter, InterfaceHeader, DatabaseConfig
+from app.schemas import ResponseModel
+from app.core.security import get_current_active_user
 from loguru import logger
 import sqlparse
 from sqlparse.sql import Statement, IdentifierList, Identifier

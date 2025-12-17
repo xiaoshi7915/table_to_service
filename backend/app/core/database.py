@@ -6,7 +6,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
 from typing import Generator
-from config import settings
+from app.core.config import settings
 from loguru import logger
 
 # 创建目标数据库引擎（用于表转服务的目标数据库）
@@ -67,7 +67,7 @@ def get_db() -> Generator[Session, None, None]:
     try:
         yield db
     except Exception as e:
-        logger.error(f"本地数据库会话错误: {e}")
+        logger.error("本地数据库会话错误: {}", e)
         db.rollback()
         raise
     finally:
@@ -89,7 +89,7 @@ def get_target_db() -> Generator[Session, None, None]:
     try:
         yield db
     except Exception as e:
-        logger.error(f"目标数据库会话错误: {e}")
+        logger.error("目标数据库会话错误: {}", e)
         db.rollback()
         raise
     finally:
@@ -106,7 +106,7 @@ def get_db_context() -> Generator[Session, None, None]:
         yield db
         db.commit()
     except Exception as e:
-        logger.error(f"数据库会话错误: {e}")
+        logger.error("数据库会话错误: {}", e)
         db.rollback()
         raise
     finally:
@@ -121,7 +121,7 @@ def get_table_names() -> list:
         inspector = inspect(target_engine)
         return inspector.get_table_names()
     except Exception as e:
-        logger.error(f"获取表名失败: {e}")
+        logger.error("获取表名失败: {}", e)
         raise
 
 
@@ -134,7 +134,7 @@ def get_table_columns(table_name: str) -> list:
         columns = inspector.get_columns(table_name)
         return columns
     except Exception as e:
-        logger.error(f"获取表 {table_name} 的列信息失败: {e}")
+        logger.error("获取表 {} 的列信息失败: {}", table_name, e)
         raise
 
 
@@ -149,7 +149,7 @@ def get_primary_key(table_name: str) -> str:
             return pk_constraint['constrained_columns'][0]
         return None
     except Exception as e:
-        logger.error(f"获取表 {table_name} 的主键失败: {e}")
+        logger.error("获取表 {} 的主键失败: {}", table_name, e)
         return None
 
 
@@ -163,7 +163,7 @@ def test_connection() -> bool:
         logger.info("目标数据库连接成功")
         return True
     except Exception as e:
-        logger.error(f"目标数据库连接失败: {e}")
+        logger.error("目标数据库连接失败: {}", e)
         return False
 
 
@@ -177,6 +177,6 @@ def test_local_connection() -> bool:
         logger.info("本地数据库连接成功")
         return True
     except Exception as e:
-        logger.error(f"本地数据库连接失败: {e}")
+        logger.error("本地数据库连接失败: {}", e)
         return False
 

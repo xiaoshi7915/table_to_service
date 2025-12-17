@@ -4,10 +4,23 @@
 from pydantic_settings import BaseSettings
 from typing import List
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-# 加载环境变量
-load_dotenv()
+# 获取backend目录的路径
+BACKEND_DIR = Path(__file__).parent.parent.parent
+ENV_FILE = BACKEND_DIR / ".env"
+
+# 加载环境变量（优先从backend目录，如果不存在则从项目根目录）
+if ENV_FILE.exists():
+    load_dotenv(ENV_FILE)
+else:
+    # 尝试从项目根目录加载
+    root_env = BACKEND_DIR.parent / ".env"
+    if root_env.exists():
+        load_dotenv(root_env)
+    else:
+        load_dotenv()
 
 
 class Settings(BaseSettings):
@@ -67,4 +80,12 @@ class Settings(BaseSettings):
 
 # 全局配置实例
 settings = Settings()
+
+# 检查SECRET_KEY是否为默认值（生产环境安全警告）
+if settings.SECRET_KEY == "your-secret-key-change-this-in-production":
+    import warnings
+    warnings.warn(
+        "⚠️  安全警告：SECRET_KEY使用默认值，生产环境请务必修改！",
+        UserWarning
+    )
 

@@ -5,10 +5,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import Optional
-from database import get_local_db
-from models import User, InterfaceConfig, DatabaseConfig
-from schemas import ResponseModel
-from auth import get_current_active_user
+from app.core.database import get_local_db
+from app.models import User, InterfaceConfig, DatabaseConfig
+from app.schemas import ResponseModel
+from app.core.security import get_current_active_user
 from loguru import logger
 
 router = APIRouter(prefix="/api/v1/table-configs", tags=["表配置"])
@@ -60,7 +60,7 @@ async def list_configs(
             data=result
         )
     except Exception as e:
-        logger.error(f"获取表配置列表失败: {e}", exc_info=True)
+        logger.error("获取表配置列表失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取表配置列表失败: {str(e)}"

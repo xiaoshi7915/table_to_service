@@ -1,5 +1,5 @@
 """
-认证和授权模块
+安全相关功能模块
 """
 from datetime import datetime, timedelta
 from typing import Optional
@@ -8,10 +8,10 @@ from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
-from config import settings
-from database import get_db
-from models import User
-from schemas import TokenData
+from app.core.config import settings
+from app.core.database import get_db
+from app.models import User
+from app.schemas import TokenData
 from loguru import logger
 
 # 密码加密上下文
@@ -33,13 +33,13 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     try:
         return pwd_context.verify(plain_password, hashed_password)
     except Exception as e:
-        logger.warning(f"密码验证失败，尝试备用方案: {e}")
+        logger.warning("密码验证失败，尝试备用方案: {}", e)
         # 如果bcrypt验证失败，尝试sha256_crypt
         try:
             fallback_context = CryptContext(schemes=["sha256_crypt"], deprecated="auto")
             return fallback_context.verify(plain_password, hashed_password)
         except Exception as e2:
-            logger.error(f"备用密码验证也失败: {e2}")
+            logger.error("备用密码验证也失败: {}", e2)
             return False
 
 
@@ -53,13 +53,13 @@ def get_password_hash(password: str) -> str:
             password = password[:72]
         return pwd_context.hash(password)
     except Exception as e:
-        logger.error(f"密码哈希失败: {e}")
+        logger.error("密码哈希失败: {}", e)
         # 如果bcrypt失败，尝试使用sha256_crypt
         try:
             fallback_context = CryptContext(schemes=["sha256_crypt"], deprecated="auto")
             return fallback_context.hash(password)
         except Exception as e2:
-            logger.error(f"备用密码哈希也失败: {e2}")
+            logger.error("备用密码哈希也失败: {}", e2)
             raise
 
 
@@ -87,7 +87,7 @@ def verify_token(token: str, credentials_exception: HTTPException) -> TokenData:
         token_data = TokenData(username=username)
         return token_data
     except JWTError as e:
-        logger.warning(f"Token验证失败: {e}")
+        logger.warning("Token验证失败: {}", e)
         raise credentials_exception
 
 
@@ -100,11 +100,15 @@ def authenticate_user(db: Session, username: str, password: str) -> Optional[Use
     """验证用户"""
     user = get_user_by_username(db, username)
     if not user:
+        logger.debug("用户不存在: {}", username)
         return None
     if not verify_password(password, user.hashed_password):
+        logger.warning("密码验证失败: {}", username)
         return None
     if not user.is_active:
+        logger.warning("用户未激活: {}", username)
         return None
+    logger.debug("用户验证成功: {}", username)
     return user
 
 
@@ -124,11 +128,11 @@ def get_current_user(
         user = get_user_by_username(db, username=token_data.username)
         
         if user is None:
-            logger.warning(f"用户不存在: {token_data.username}")
+            logger.warning("用户不存在: {}", token_data.username)
             raise credentials_exception
         
         if not user.is_active:
-            logger.warning(f"用户已被禁用: {token_data.username}")
+            logger.warning("用户已被禁用: {}", token_data.username)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="用户已被禁用"
@@ -138,7 +142,7 @@ def get_current_user(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"获取当前用户失败: {e}", exc_info=True)
+        logger.error("获取当前用户失败: {}", e, exc_info=True)
         raise credentials_exception
 
 

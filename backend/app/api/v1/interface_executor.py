@@ -5,10 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request, Query, B
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any
-from database import get_local_db
-from models import User, InterfaceConfig, DatabaseConfig
-from schemas import ResponseModel
-from auth import get_current_active_user, get_current_user
+from app.core.database import get_local_db
+from app.models import User, InterfaceConfig, DatabaseConfig
+from app.schemas import ResponseModel
+from app.core.security import get_current_active_user, get_current_user
 from loguru import logger
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -165,14 +165,29 @@ def execute_interface_sql(
             if not sql:
                 raise ValueError("SQL语句为空")
             
-            # 专家模式：替换参数（图形模式的参数已在build_sql_from_graphical_config中处理）
+            # 专家模式：使用参数化查询（防止SQL注入）
+            # 注意：这里使用text()和参数绑定，但需要确保SQL语句中的参数使用:param_name格式
+            # 如果SQL中已经使用了:param_name格式，SQLAlchemy会自动处理参数绑定
+            # 但为了兼容性，我们仍然需要处理字符串替换（已转义）
             if interface_config.entry_mode == "expert":
+                # 转义单引号防止SQL注入
+                def escape_sql_string(value):
+                    """转义SQL字符串值，防止SQL注入"""
+                    if isinstance(value, str):
+                        # 转义单引号：' -> ''
+                        escaped = value.replace("'", "''")
+                        # 转义反斜杠：\ -> \\
+                        escaped = escaped.replace("\\", "\\\\")
+                        return escaped
+                    return str(value)
+                
                 for key, value in params.items():
                     placeholder = f":{key}"
                     if placeholder in sql:
-                        # 对于字符串值，需要加引号
+                        # 对于字符串值，转义后加引号
                         if isinstance(value, str):
-                            sql = sql.replace(placeholder, f"'{value}'")
+                            escaped_value = escape_sql_string(value)
+                            sql = sql.replace(placeholder, f"'{escaped_value}'")
                         else:
                             sql = sql.replace(placeholder, str(value))
             
@@ -334,6 +349,17 @@ def build_sql_from_graphical_config(interface_config: InterfaceConfig, params: D
             else:
                 op = "="
             
+            # 转义SQL字符串值，防止SQL注入
+            def escape_sql_value(val):
+                """转义SQL字符串值"""
+                if isinstance(val, str):
+                    # 转义单引号：' -> ''
+                    escaped = val.replace("'", "''")
+                    # 转义反斜杠：\ -> \\
+                    escaped = escaped.replace("\\", "\\\\")
+                    return escaped
+                return str(val)
+            
             # 获取值
             if value_type == "variable" and variable_name:
                 # 从参数中获取值
@@ -341,27 +367,39 @@ def build_sql_from_graphical_config(interface_config: InterfaceConfig, params: D
                 if param_value is None:
                     continue
                 if operator in ["like", "not_like"]:
-                    cond_value = f"'{param_value}'"
+                    escaped_val = escape_sql_value(param_value)
+                    cond_value = f"'{escaped_val}'"
                 elif operator in ["in", "not_in"]:
                     if isinstance(param_value, list):
-                        values = ", ".join([f"'{v}'" if isinstance(v, str) else str(v) for v in param_value])
+                        values = ", ".join([f"'{escape_sql_value(v)}'" if isinstance(v, str) else str(v) for v in param_value])
                     else:
-                        values = f"'{param_value}'"
+                        escaped_val = escape_sql_value(param_value)
+                        values = f"'{escaped_val}'"
                     cond_value = f"({values})"
                 else:
-                    cond_value = f"'{param_value}'" if isinstance(param_value, str) else str(param_value)
+                    if isinstance(param_value, str):
+                        escaped_val = escape_sql_value(param_value)
+                        cond_value = f"'{escaped_val}'"
+                    else:
+                        cond_value = str(param_value)
             else:
                 # 常量值
                 if operator in ["like", "not_like"]:
-                    cond_value = f"'{value}'"
+                    escaped_val = escape_sql_value(value)
+                    cond_value = f"'{escaped_val}'"
                 elif operator in ["in", "not_in"]:
                     if isinstance(value, list):
-                        values = ", ".join([f"'{v}'" if isinstance(v, str) else str(v) for v in value])
+                        values = ", ".join([f"'{escape_sql_value(v)}'" if isinstance(v, str) else str(v) for v in value])
                     else:
-                        values = f"'{value}'"
+                        escaped_val = escape_sql_value(value)
+                        values = f"'{escaped_val}'"
                     cond_value = f"({values})"
                 else:
-                    cond_value = f"'{value}'" if isinstance(value, str) else str(value)
+                    if isinstance(value, str):
+                        escaped_val = escape_sql_value(value)
+                        cond_value = f"'{escaped_val}'"
+                    else:
+                        cond_value = str(value)
             
             where_parts.append(f"{escaped_field} {op} {cond_value}")
         
@@ -501,7 +539,7 @@ async def execute_interface_get(
         
         # 添加自定义HTTP响应头
         try:
-            from models import InterfaceHeader
+            from app.models import InterfaceHeader
             response_headers = db.query(InterfaceHeader).filter(
                 InterfaceHeader.interface_config_id == interface_config.id,
                 InterfaceHeader.name.like("Response-%")
@@ -702,7 +740,7 @@ async def execute_interface_post(
         
         # 添加自定义HTTP响应头
         try:
-            from models import InterfaceHeader
+            from app.models import InterfaceHeader
             response_headers = db.query(InterfaceHeader).filter(
                 InterfaceHeader.interface_config_id == interface_config.id,
                 InterfaceHeader.name.like("Response-%")

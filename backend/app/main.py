@@ -8,9 +8,16 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from loguru import logger
 import sys
-from config import settings
-from database import Base, local_engine, test_local_connection
-from routers import auth, api_docs, interface_configs, interface_executor, database_configs, table_configs
+from pathlib import Path
+
+# 添加backend目录到Python路径
+BACKEND_DIR = Path(__file__).parent.parent
+sys.path.insert(0, str(BACKEND_DIR))
+
+from app.core.config import settings
+from app.core.database import Base, local_engine, test_local_connection
+from app.api.v1 import api_router
+from app.api.v1 import auth, api_docs, interface_configs, interface_executor, database_configs, table_configs
 
 # 配置日志
 logger.remove()
@@ -19,8 +26,13 @@ logger.add(
     format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
     level="DEBUG" if settings.DEBUG else "INFO"
 )
+
+# 创建logs目录（如果不存在）
+logs_dir = BACKEND_DIR / "logs"
+logs_dir.mkdir(exist_ok=True)
+
 logger.add(
-    "logs/app_{time:YYYY-MM-DD}.log",
+    str(logs_dir / "app_{time:YYYY-MM-DD}.log"),
     rotation="00:00",
     retention="30 days",
     format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
@@ -49,7 +61,7 @@ app.add_middleware(
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     """HTTP异常处理"""
-    logger.warning(f"HTTP异常: {exc.status_code} - {exc.detail}")
+    logger.warning("HTTP异常: {} - {}", exc.status_code, exc.detail)
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -63,7 +75,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """请求验证异常处理"""
-    logger.warning(f"请求验证失败: {exc.errors()}")
+    logger.warning("请求验证失败: {}", exc.errors())
     return JSONResponse(
         status_code=422,
         content={
@@ -77,7 +89,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """全局异常处理"""
-    logger.error(f"未处理的异常: {exc}", exc_info=True)
+    logger.error("未处理的异常: {}", exc, exc_info=True)
     return JSONResponse(
         status_code=500,
         content={
@@ -109,18 +121,18 @@ async def startup_event():
     
     # 测试本地数据库连接
     if test_local_connection():
-        logger.info("✅ 本地数据库连接成功")
+        logger.info("本地数据库连接成功")
         
         # 创建数据库表
         try:
             Base.metadata.create_all(bind=local_engine)
-            logger.info("✅ 数据库表创建/检查完成")
+            logger.info("数据库表创建/检查完成")
         except Exception as e:
-            logger.error(f"❌ 数据库表创建失败: {e}")
+            logger.error("数据库表创建失败: {}", e)
     else:
-        logger.error("❌ 本地数据库连接失败")
+        logger.error("本地数据库连接失败")
     
-    logger.info(f"服务运行在: http://{settings.HOST}:{settings.PORT}")
+    logger.info("服务运行在: http://{}:{}", settings.HOST, settings.PORT)
     logger.info("=" * 50)
 
 
@@ -148,7 +160,7 @@ async def health():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "main:app",
+        "app.main:app",
         host=settings.HOST,
         port=settings.PORT,
         reload=settings.DEBUG,

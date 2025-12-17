@@ -4,10 +4,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Body, Query
 from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional
-from database import get_local_db
-from models import User, DatabaseConfig
-from schemas import ResponseModel
-from auth import get_current_active_user
+from app.core.database import get_local_db
+from app.models import User, DatabaseConfig
+from app.schemas import ResponseModel
+from app.core.security import get_current_active_user
 from loguru import logger
 from sqlalchemy import create_engine, text, inspect
 from urllib.parse import quote_plus
@@ -92,7 +92,7 @@ async def list_configs(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"获取数据库配置列表失败: {e}", exc_info=True)
+        logger.error("获取数据库配置列表失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取数据库配置列表失败: {str(e)}"
@@ -136,7 +136,7 @@ async def get_config(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"获取数据库配置详情失败: {e}", exc_info=True)
+        logger.error("获取数据库配置详情失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取数据库配置详情失败: {str(e)}"
@@ -175,7 +175,7 @@ async def create_config(
         )
     except Exception as e:
         db.rollback()
-        logger.error(f"创建数据库配置失败: {e}", exc_info=True)
+        logger.error("创建数据库配置失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"创建数据库配置失败: {str(e)}"
@@ -216,7 +216,7 @@ async def update_config(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"更新数据库配置失败: {e}", exc_info=True)
+        logger.error("更新数据库配置失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"更新数据库配置失败: {str(e)}"
@@ -250,7 +250,7 @@ async def delete_config(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"删除数据库配置失败: {e}", exc_info=True)
+        logger.error("删除数据库配置失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"删除数据库配置失败: {str(e)}"
@@ -292,7 +292,7 @@ async def test_connection_direct(
                 message="连接成功"
             )
         except Exception as e:
-            logger.error(f"数据库连接测试失败: {e}", exc_info=True)
+            logger.error("数据库连接测试失败: {}", e, exc_info=True)
             
             # 解析错误信息，提供更友好的提示
             error_str = str(e)
@@ -324,7 +324,7 @@ async def test_connection_direct(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"测试数据库连接失败: {e}", exc_info=True)
+        logger.error("测试数据库连接失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"测试连接失败: {str(e)}"
@@ -364,7 +364,7 @@ async def test_connection(
                 message="连接成功"
             )
         except Exception as e:
-            logger.error(f"数据库连接测试失败: {e}", exc_info=True)
+            logger.error("数据库连接测试失败: {}", e, exc_info=True)
             
             # 解析错误信息，提供更友好的提示
             error_str = str(e)
@@ -396,7 +396,7 @@ async def test_connection(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"测试数据库连接失败: {e}", exc_info=True)
+        logger.error("测试数据库连接失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"测试连接失败: {str(e)}"
@@ -440,7 +440,7 @@ async def list_tables(
                 data=table_names
             )
         except Exception as e:
-            logger.error(f"获取表列表失败: {e}", exc_info=True)
+            logger.error("获取表列表失败: {}", e, exc_info=True)
             
             # 解析错误信息，提供更友好的提示
             error_str = str(e)
@@ -475,7 +475,7 @@ async def list_tables(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"获取表列表失败: {e}", exc_info=True)
+        logger.error("获取表列表失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取表列表失败: {str(e)}"
@@ -555,7 +555,7 @@ async def get_table_info(
                 data=result
             )
         except Exception as e:
-            logger.error(f"获取表信息失败: {e}", exc_info=True)
+            logger.error("获取表信息失败: {}", e, exc_info=True)
             
             # 解析错误信息，提供更友好的提示
             error_str = str(e)
@@ -590,7 +590,7 @@ async def get_table_info(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"获取表信息失败: {e}", exc_info=True)
+        logger.error("获取表信息失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取表信息失败: {str(e)}"

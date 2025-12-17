@@ -5,7 +5,7 @@ services:
     build: .
     container_name: table-service-api
     ports:
-      - "5001:5001"
+      - "8000:8000"
     environment:
       - LOCAL_DB_HOST=${LOCAL_DB_HOST:-mysql}
       - LOCAL_DB_PORT=${LOCAL_DB_PORT:-3306}
@@ -15,11 +15,12 @@ services:
       - SECRET_KEY=${SECRET_KEY:-change-this-in-production}
       - ALGORITHM=${ALGORITHM:-HS256}
       - API_HOST=0.0.0.0
-      - API_PORT=5001
+      - API_PORT=8000
       - DEBUG=${DEBUG:-False}
     volumes:
-      - ./logs:/app/logs
-      - ./.env:/app/.env
+      - ./backend/logs:/app/backend/logs
+      - ./.env:/app/backend/.env:ro
+    working_dir: /app/backend
     restart: unless-stopped
     depends_on:
       - mysql
@@ -46,4 +47,3 @@ volumes:
 networks:
   app-network:
     driver: bridge
-

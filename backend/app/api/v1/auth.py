@@ -4,17 +4,17 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from datetime import timedelta
-from database import get_db
-from models import User
-from schemas import UserRegister, UserLogin, Token, ResponseModel
-from auth import (
+from app.core.database import get_db
+from app.models import User
+from app.schemas import UserRegister, UserLogin, Token, ResponseModel
+from app.core.security import (
     authenticate_user,
     create_access_token,
     get_password_hash,
     get_user_by_username,
     get_current_active_user
 )
-from config import settings
+from app.core.config import settings
 from loguru import logger
 
 router = APIRouter(prefix="/api/v1/auth", tags=["认证"])
@@ -42,7 +42,7 @@ async def register(request: Request, user_data: UserRegister, db: Session = Depe
         db.commit()
         db.refresh(new_user)
         
-        logger.info(f"新用户注册: {user_data.username}")
+        logger.info("新用户注册: {}", user_data.username)
         
         return ResponseModel(
             success=True,
@@ -53,7 +53,7 @@ async def register(request: Request, user_data: UserRegister, db: Session = Depe
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"注册失败: {e}", exc_info=True)
+        logger.error("注册失败: {}", e, exc_info=True)
         error_msg = str(e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -65,8 +65,12 @@ async def register(request: Request, user_data: UserRegister, db: Session = Depe
 async def login(request: Request, user_data: UserLogin, db: Session = Depends(get_db)):
     """用户登录"""
     try:
+        # 记录登录尝试
+        logger.debug("登录尝试: 用户名={}", user_data.username)
+        
         user = authenticate_user(db, user_data.username, user_data.password)
         if not user:
+            logger.warning("登录失败: 用户名或密码错误 - {}", user_data.username)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="用户名或密码错误",
@@ -78,13 +82,13 @@ async def login(request: Request, user_data: UserLogin, db: Session = Depends(ge
             data={"sub": user.username}, expires_delta=access_token_expires
         )
         
-        logger.info(f"用户登录: {user_data.username}")
+        logger.info("用户登录成功: {}", user_data.username)
         
         return Token(access_token=access_token, token_type="bearer")
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"登录失败: {e}")
+        logger.error("登录失败: {}", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="登录失败"
