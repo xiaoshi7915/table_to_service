@@ -61,6 +61,12 @@
       <el-main class="main-content">
         <router-view />
       </el-main>
+      
+      <el-footer class="footer">
+        <div class="footer-content">
+          Copyright © 2025 mr stone的个人网站
+        </div>
+      </el-footer>
     </el-container>
   </el-container>
 </template>
@@ -86,7 +92,7 @@ const pageTitle = computed(() => {
     '/interface-config': '数据表转接口',
     '/api-docs': 'API文档'
   }
-  return titles[route.path] || 'MySQL表转服务'
+  return titles[route.path] || '表转接口服务'
 })
 
 const handleCommand = (command) => {
@@ -232,7 +238,24 @@ const handleCommand = (command) => {
   background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
   padding: 24px;
   overflow-y: auto;
-  min-height: calc(100vh - 70px);
+  min-height: calc(100vh - 70px - 60px);
+}
+
+.footer {
+  background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+  border-top: 1px solid #e4e7ed;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 24px;
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.footer-content {
+  color: #909399;
+  font-size: 14px;
+  text-align: center;
 }
 </style>
 

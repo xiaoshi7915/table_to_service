@@ -2,8 +2,8 @@
   <div class="login-container">
     <div class="login-box">
       <div class="login-header">
-        <h1>MySQL表转服务</h1>
-        <p>管理平台</p>
+        <h1>表转接口服务</h1>
+        <p>管理工具</p>
       </div>
       
       <el-form
@@ -44,6 +44,12 @@
             登录
           </el-button>
         </el-form-item>
+        
+        <!-- 体验账号提示 -->
+        <div class="demo-account-tip">
+          <div class="tip-line">体验用户名：admin</div>
+          <div class="tip-line">体验密码：admin123</div>
+        </div>
       </el-form>
       
       <div class="login-footer">
@@ -155,6 +161,21 @@ const handleRegister = () => {
 .login-footer {
   text-align: center;
   margin-top: 20px;
+}
+
+.demo-account-tip {
+  text-align: center;
+  margin-top: 15px;
+  padding: 12px;
+  background: #f5f7fa;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #606266;
+}
+
+.tip-line {
+  line-height: 1.8;
+  margin: 2px 0;
 }
 </style>
 

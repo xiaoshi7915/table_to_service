@@ -177,8 +177,17 @@
               {{ currentInterface.status === 'active' ? '激活' : currentInterface.status === 'inactive' ? '禁用' : '草稿' }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="请求方式">{{ currentInterface.http_method }}</el-descriptions-item>
-          <el-descriptions-item label="接口路径">{{ currentInterface.proxy_path }}</el-descriptions-item>
+          <el-descriptions-item label="请求方式">
+            <el-tag :type="getMethodType(currentInterface.http_method)">{{ currentInterface.http_method }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="接口路径">
+            <code style="color: #409eff;">{{ currentInterface.proxy_path }}</code>
+          </el-descriptions-item>
+          <el-descriptions-item label="完整URL" :span="2">
+            <el-text type="primary" copyable style="font-family: monospace; word-break: break-all;">
+              {{ interfaceFullUrl || getInterfaceFullUrl(currentInterface) }}
+            </el-text>
+          </el-descriptions-item>
           <el-descriptions-item label="接口描述" :span="2">
             {{ currentInterface.interface_description || '无' }}
           </el-descriptions-item>
@@ -233,7 +242,15 @@
               </div>
             </el-tab-pane>
             <el-tab-pane label="响应样例">
-              <pre v-if="responseSample" style="background: #f5f5f5; padding: 15px; border-radius: 4px; overflow-x: auto;">{{ JSON.stringify(responseSample, null, 2) }}</pre>
+              <div v-if="responseSample" style="position: relative;">
+                <div style="margin-bottom: 10px; text-align: right;">
+                  <el-button size="small" type="primary" @click="copyToClipboard(JSON.stringify(responseSample, null, 2))">
+                    <el-icon><DocumentCopy /></el-icon>
+                    复制
+                  </el-button>
+                </div>
+                <pre class="code-block-light">{{ JSON.stringify(responseSample, null, 2) }}</pre>
+              </div>
               <el-empty v-else description="暂无响应样例" />
             </el-tab-pane>
           </el-tabs>
@@ -245,23 +262,33 @@
     <el-dialog
       v-model="apiDocDialogVisible"
       title="API接口文档"
-      width="85%"
+      width="90%"
       :close-on-click-modal="false"
       class="api-doc-dialog"
+      :show-close="true"
     >
-      <div v-if="apiDoc">
-        <el-descriptions :column="2" border>
-          <el-descriptions-item label="接口名称">{{ apiDoc.title }}</el-descriptions-item>
-          <el-descriptions-item label="请求方式">
-            <el-tag :type="getMethodType(apiDoc.method)">{{ apiDoc.method }}</el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="接口路径" :span="2">
-            <el-text type="primary" copyable>{{ apiDoc.full_url }}</el-text>
-          </el-descriptions-item>
-          <el-descriptions-item label="接口描述" :span="2">{{ apiDoc.description }}</el-descriptions-item>
-        </el-descriptions>
+      <div v-if="apiDoc" class="api-doc-content">
+        <el-card class="api-info-card" shadow="never">
+          <el-descriptions :column="2" border>
+            <el-descriptions-item label="接口名称">
+              <el-text type="primary" size="large">{{ apiDoc.title }}</el-text>
+            </el-descriptions-item>
+            <el-descriptions-item label="请求方式">
+              <el-tag :type="getMethodType(apiDoc.method)" size="large">{{ apiDoc.method }}</el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="接口路径" :span="2">
+              <el-text type="primary" copyable style="font-family: monospace;">{{ apiDoc.full_url }}</el-text>
+            </el-descriptions-item>
+            <el-descriptions-item label="接口描述" :span="2">
+              {{ apiDoc.description || '无描述' }}
+            </el-descriptions-item>
+          </el-descriptions>
+        </el-card>
         
-        <el-divider>请求参数</el-divider>
+        <el-divider>
+          <el-icon><Document /></el-icon>
+          <span style="margin-left: 8px;">请求参数</span>
+        </el-divider>
         <el-table 
           v-if="apiDoc.request.parameters && apiDoc.request.parameters.length > 0"
           :data="apiDoc.request.parameters" 
@@ -276,42 +303,70 @@
         </el-table>
         <el-empty v-else description="无请求参数" />
         
-        <el-divider>请求示例</el-divider>
-        <el-card>
-          <el-tabs>
+        <el-divider>
+          <el-icon><Edit /></el-icon>
+          <span style="margin-left: 8px;">请求示例</span>
+          <el-button size="small" type="primary" @click="copyRequestExample(apiDoc)" style="margin-left: 10px;">
+            <el-icon><DocumentCopy /></el-icon>
+            复制
+          </el-button>
+        </el-divider>
+        <el-card class="example-card" shadow="hover">
+          <el-tabs type="border-card">
             <el-tab-pane :label="apiDoc.method === 'GET' ? 'Query参数' : '请求体'">
-              <pre style="background: #f5f5f5; padding: 15px; border-radius: 4px; overflow-x: auto;">{{ JSON.stringify(apiDoc.request.sample, null, 2) }}</pre>
+              <div style="position: relative;">
+                <pre class="code-block-light">{{ JSON.stringify(apiDoc.request.sample, null, 2) }}</pre>
+              </div>
             </el-tab-pane>
             <el-tab-pane label="cURL示例">
-              <pre style="background: #f5f5f5; padding: 15px; border-radius: 4px; overflow-x: auto;">{{ generateCurlExample(apiDoc) }}</pre>
+              <div style="position: relative;">
+                <pre class="code-block-light">{{ generateCurlExample(apiDoc) }}</pre>
+              </div>
             </el-tab-pane>
           </el-tabs>
         </el-card>
         
-        <el-divider>响应示例</el-divider>
-        <el-card>
-          <pre style="background: #f5f5f5; padding: 15px; border-radius: 4px; overflow-x: auto;">{{ JSON.stringify(apiDoc.response.sample, null, 2) }}</pre>
+        <el-divider>
+          <el-icon><SuccessFilled /></el-icon>
+          <span style="margin-left: 8px;">响应示例</span>
+          <el-button size="small" type="primary" @click="copyToClipboard(JSON.stringify(apiDoc.response.sample, null, 2))" style="margin-left: 10px;">
+            <el-icon><DocumentCopy /></el-icon>
+            复制
+          </el-button>
+        </el-divider>
+        <el-card class="example-card" shadow="hover">
+          <pre class="code-block-light">{{ JSON.stringify(apiDoc.response.sample, null, 2) }}</pre>
         </el-card>
         
-        <el-divider>其他信息</el-divider>
-        <el-descriptions :column="2" border>
-          <el-descriptions-item label="分页">
-            {{ apiDoc.pagination.enabled ? '启用' : '禁用' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="认证">
-            {{ apiDoc.authentication.required ? apiDoc.authentication.type : '无需认证' }}
-          </el-descriptions-item>
-        </el-descriptions>
+        <el-divider>
+          <el-icon><InfoFilled /></el-icon>
+          <span style="margin-left: 8px;">其他信息</span>
+        </el-divider>
+        <el-card class="api-info-card" shadow="never">
+          <el-descriptions :column="2" border>
+            <el-descriptions-item label="分页">
+              <el-tag :type="apiDoc.pagination.enabled ? 'success' : 'info'">
+                {{ apiDoc.pagination.enabled ? '启用' : '禁用' }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="认证">
+              <el-tag :type="apiDoc.authentication.required ? 'warning' : 'success'">
+                {{ apiDoc.authentication.required ? apiDoc.authentication.type : '无需认证' }}
+              </el-tag>
+            </el-descriptions-item>
+          </el-descriptions>
+        </el-card>
       </div>
     </el-dialog>
     
     <!-- 接口执行对话框 -->
     <el-dialog
       v-model="executeDialogVisible"
-      title="执行接口"
-      width="75%"
+      title="执行接口测试"
+      width="85%"
       :close-on-click-modal="false"
       class="execute-dialog"
+      :show-close="true"
     >
       <div v-if="currentInterface">
         <!-- 接口元数据信息 -->
@@ -400,24 +455,52 @@
         </div>
         
         <!-- 执行结果 -->
-        <el-divider v-if="executeResult">执行结果</el-divider>
-        <el-card v-if="executeResult">
-          <el-descriptions :column="1" border>
-            <el-descriptions-item label="状态">
-              <el-tag :type="executeResult.success ? 'success' : 'danger'">
-                {{ executeResult.success ? '成功' : '失败' }}
-              </el-tag>
+        <el-divider v-if="executeResult">
+          <el-icon><List /></el-icon>
+          <span style="margin-left: 8px;">执行结果</span>
+        </el-divider>
+        <el-card v-if="executeResult" class="result-card" shadow="hover">
+          <!-- 执行状态信息 -->
+          <el-alert
+            :type="executeResult.success ? 'success' : 'error'"
+            :title="executeResult.success ? '执行成功' : '执行失败'"
+            :description="executeResult.message"
+            :closable="false"
+            show-icon
+            style="margin-bottom: 20px;"
+          />
+          
+          <!-- 分页信息 -->
+          <el-descriptions 
+            v-if="executeResult.data && (executeResult.data.total !== undefined || executeResult.data.count !== undefined)"
+            :column="2" 
+            border
+            class="pagination-info"
+          >
+            <el-descriptions-item label="数据总数" v-if="executeResult.data.total !== undefined">
+              <el-tag type="info">{{ executeResult.data.total }}</el-tag>
             </el-descriptions-item>
-            <el-descriptions-item label="消息">{{ executeResult.message }}</el-descriptions-item>
-            <el-descriptions-item label="数据总数" v-if="executeResult.data?.total">
-              {{ executeResult.data.total }}
+            <el-descriptions-item label="返回条数" v-if="executeResult.data.count !== undefined">
+              <el-tag type="success">{{ executeResult.data.count }}</el-tag>
             </el-descriptions-item>
-            <el-descriptions-item label="返回条数" v-if="executeResult.data?.count">
-              {{ executeResult.data.count }}
+            <el-descriptions-item label="当前页码" v-if="executeResult.data.pageNumber !== undefined">
+              <el-tag>{{ executeResult.data.pageNumber }}</el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="每页数量" v-if="executeResult.data.pageSize !== undefined">
+              <el-tag>{{ executeResult.data.pageSize }}</el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="页码" v-if="executeResult.data.page !== undefined">
+              <el-tag>{{ executeResult.data.page }}</el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="每页大小" v-if="executeResult.data.page_size !== undefined">
+              <el-tag>{{ executeResult.data.page_size }}</el-tag>
             </el-descriptions-item>
           </el-descriptions>
           
-          <el-divider>返回数据</el-divider>
+          <el-divider>
+            <el-icon><Document /></el-icon>
+            <span style="margin-left: 8px;">返回数据</span>
+          </el-divider>
           
           <!-- 数据格式转换工具栏 -->
           <div class="data-format-toolbar" v-if="executeResult.data?.data && executeResult.data.data.length > 0">
@@ -463,9 +546,9 @@
             />
           </el-table>
           
-          <!-- JSON视图 -->
+          <!-- JSON视图 - 显示完整响应数据 -->
           <div v-if="dataFormat === 'json'" class="data-viewer">
-            <pre class="code-block">{{ formatAsJSON(executeResult.data?.data || []) }}</pre>
+            <pre class="code-block">{{ formatAsJSON(executeResult.data || {}) }}</pre>
           </div>
           
           <!-- XML视图 -->
@@ -487,7 +570,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Refresh, CaretRight, View, Edit, Delete, Document, List, CopyDocument, Download, InfoFilled } from '@element-plus/icons-vue'
+import { Plus, Refresh, CaretRight, View, Edit, Delete, Document, List, CopyDocument, Download, InfoFilled, SuccessFilled } from '@element-plus/icons-vue'
 import api from '../api'
 
 const router = useRouter()
@@ -580,11 +663,25 @@ const handleCreate = () => {
   router.push('/interface-config')
 }
 
+const interfaceFullUrl = ref('')
+
 const handleView = async (row) => {
   try {
     const res = await api.get(`/interface-configs/${row.id}`)
     if (res.data.success) {
       currentInterface.value = res.data.data
+      
+      // 获取完整URL（从API文档接口）
+      try {
+        const apiDocRes = await api.get(`/interface-configs/${row.id}/api-doc`)
+        if (apiDocRes.data.success && apiDocRes.data.data.full_url) {
+          interfaceFullUrl.value = apiDocRes.data.data.full_url
+        }
+      } catch (e) {
+        console.warn('获取完整URL失败，使用默认构建:', e)
+        interfaceFullUrl.value = getInterfaceFullUrl(currentInterface.value)
+      }
+      
       // 加载样例数据
       try {
         const samplesRes = await api.get(`/interface-configs/${row.id}/samples`)
@@ -597,10 +694,56 @@ const handleView = async (row) => {
         requestSample.value = {}
         responseSample.value = null
       }
+      
+      // 尝试获取实际响应数据作为示例
+      try {
+        const executeRes = await api.get(`/interfaces/${row.id}/execute`, {
+          params: { pageNumber: 1, pageSize: 1 }
+        })
+        if (executeRes.data.success && executeRes.data.data) {
+          // 使用实际响应数据更新示例
+          responseSample.value = {
+            success: executeRes.data.success,
+            message: executeRes.data.message,
+            data: executeRes.data.data
+          }
+        }
+      } catch (e) {
+        // 如果获取实际数据失败，使用默认示例
+        console.warn('获取实际响应数据失败，使用默认示例:', e)
+      }
+      
       detailDialogVisible.value = true
     }
   } catch (error) {
     ElMessage.error('加载接口详情失败: ' + (error.response?.data?.detail || error.message))
+  }
+}
+
+// 获取接口完整URL（备用方法）
+const getInterfaceFullUrl = (interfaceConfig) => {
+  if (!interfaceConfig) return ''
+  
+  // 从API文档获取完整URL，或者构建URL
+  try {
+    // 尝试从环境变量或配置获取服务器地址
+    const apiServerHost = import.meta.env.VITE_API_SERVER_HOST || '121.36.205.70'
+    const apiServerPort = import.meta.env.VITE_API_SERVER_PORT || '50052'
+    const scheme = interfaceConfig.proxy_schemes || 'http'
+    
+    // 构建完整URL
+    let proxyPath = interfaceConfig.proxy_path || ''
+    if (!proxyPath.startsWith('/')) {
+      proxyPath = '/' + proxyPath
+    }
+    if (!proxyPath.startsWith('/api')) {
+      proxyPath = '/api' + proxyPath
+    }
+    
+    return `${scheme}://${apiServerHost}:${apiServerPort}${proxyPath}`
+  } catch (e) {
+    console.error('构建完整URL失败:', e)
+    return interfaceConfig.proxy_path || ''
   }
 }
 
@@ -609,6 +752,25 @@ const handleViewApiDoc = async (row) => {
     const res = await api.get(`/interface-configs/${row.id}/api-doc`)
     if (res.data.success) {
       apiDoc.value = res.data.data
+      
+      // 尝试获取实际响应数据作为示例
+      try {
+        const executeRes = await api.get(`/interfaces/${row.id}/execute`, {
+          params: { pageNumber: 1, pageSize: 1 }
+        })
+        if (executeRes.data.success && executeRes.data.data) {
+          // 使用实际响应数据更新示例
+          apiDoc.value.response.sample = {
+            success: executeRes.data.success,
+            message: executeRes.data.message,
+            data: executeRes.data.data
+          }
+        }
+      } catch (e) {
+        // 如果获取实际数据失败，使用默认示例
+        console.warn('获取实际响应数据失败，使用默认示例:', e)
+      }
+      
       apiDocDialogVisible.value = true
     }
   } catch (error) {
@@ -862,23 +1024,60 @@ const formatAsCSV = (data) => {
   return csv
 }
 
+// 复制到剪贴板通用函数
+const copyToClipboard = async (text) => {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text)
+      ElMessage.success('已复制到剪贴板')
+    } else {
+      // 降级方案：使用传统方法
+      const textArea = document.createElement('textarea')
+      textArea.value = text
+      textArea.style.position = 'fixed'
+      textArea.style.left = '-999999px'
+      document.body.appendChild(textArea)
+      textArea.select()
+      try {
+        document.execCommand('copy')
+        ElMessage.success('已复制到剪贴板')
+      } catch (err) {
+        ElMessage.error('复制失败，请手动复制')
+      }
+      document.body.removeChild(textArea)
+    }
+  } catch (error) {
+    ElMessage.error('复制失败: ' + error.message)
+  }
+}
+
+// 复制请求示例（根据当前tab复制不同的内容）
+const copyRequestExample = (apiDoc) => {
+  // 这里可以根据当前选中的tab来决定复制什么
+  // 暂时复制JSON格式的请求示例
+  const text = JSON.stringify(apiDoc.request.sample, null, 2)
+  copyToClipboard(text)
+}
+
 // 复制格式化数据
 const copyFormattedData = async () => {
-  if (!executeResult.value?.data?.data) return
+  if (!executeResult.value?.data) return
   
   let text = ''
   switch (dataFormat.value) {
     case 'json':
-      text = formatAsJSON(executeResult.value.data.data)
+      // JSON格式显示完整响应数据（包括分页信息）
+      text = formatAsJSON(executeResult.value.data)
       break
     case 'xml':
-      text = formatAsXML(executeResult.value.data.data)
+      text = formatAsXML(executeResult.value.data.data || [])
       break
     case 'csv':
-      text = formatAsCSV(executeResult.value.data.data)
+      text = formatAsCSV(executeResult.value.data.data || [])
       break
     default:
-      text = formatAsJSON(executeResult.value.data.data)
+      // 默认显示完整响应数据
+      text = formatAsJSON(executeResult.value.data)
   }
   
   try {
@@ -1407,6 +1606,65 @@ pre {
   .download-data-btn {
     margin-left: 0;
     width: 100%;
+  }
+}
+
+/* API文档弹框样式美化 */
+.api-doc-dialog {
+  .api-doc-content {
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+  
+  .api-info-card {
+    margin-bottom: 20px;
+    border: 1px solid #e4e7ed;
+    border-radius: 8px;
+  }
+  
+  .example-card {
+    margin-bottom: 20px;
+    border: 1px solid #e4e7ed;
+    border-radius: 8px;
+  }
+  
+  .code-block-light {
+    margin: 0;
+    padding: 16px;
+    background: #f5f7fa;
+    color: #303133;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    border-radius: 4px;
+    overflow-x: auto;
+    border: 1px solid #e4e7ed;
+  }
+}
+
+/* 执行测试弹框样式美化 */
+.execute-dialog {
+  .result-card {
+    margin-top: 20px;
+    border: 1px solid #e4e7ed;
+    border-radius: 8px;
+  }
+  
+  .pagination-info {
+    margin: 20px 0;
+  }
+  
+  .metadata-card {
+    margin-bottom: 20px;
+    border: 1px solid #e4e7ed;
+    border-radius: 8px;
+  }
+  
+  .metadata-header {
+    display: flex;
+    align-items: center;
+    font-weight: 600;
+    color: #409eff;
   }
 }
 </style>

@@ -17,7 +17,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 from app.core.config import settings
 from app.core.database import Base, local_engine, test_local_connection
 from app.api.v1 import api_router
-from app.api.v1 import auth, api_docs, interface_configs, interface_executor, database_configs, table_configs
+from app.api.v1 import auth, api_docs, interface_configs, interface_executor, database_configs, table_configs, interface_proxy
 
 # 配置日志
 logger.remove()
@@ -101,12 +101,14 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # 注册路由
+# 注意：interface_proxy 必须最后注册，因为它使用通配符路径
 app.include_router(auth.router)
 app.include_router(database_configs.router)
 app.include_router(table_configs.router)
 app.include_router(api_docs.router)
 app.include_router(interface_configs.router)
 app.include_router(interface_executor.router)
+app.include_router(interface_proxy.router)  # 动态接口代理，必须最后注册
 
 logger.info("路由注册完成")
 

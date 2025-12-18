@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     # CORS配置
     ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8080,http://127.0.0.1:3000")
     
+    # API服务地址配置（用于生成接口文档中的完整URL）
+    API_SERVER_HOST: str = os.getenv("API_SERVER_HOST", "")  # 如果为空，则从请求头获取
+    API_SERVER_PORT: int = int(os.getenv("API_SERVER_PORT", "8300"))  # API服务端口
+    API_SERVER_SCHEME: str = os.getenv("API_SERVER_SCHEME", "http")  # http 或 https
+    
     @property
     def database_url(self) -> str:
         """生成目标数据库连接URL（用于表转服务）"""

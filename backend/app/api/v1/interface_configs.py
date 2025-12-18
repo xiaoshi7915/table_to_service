@@ -2,6 +2,7 @@
 接口配置路由
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from starlette.requests import Request
 from sqlalchemy.orm import Session
 from typing import Optional, List, Dict, Any
 from app.core.database import get_local_db
@@ -668,6 +669,7 @@ async def get_interface_samples(
 @router.get("/{config_id}/api-doc", response_model=ResponseModel)
 async def get_interface_api_doc(
     config_id: int,
+    request: Request,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_local_db)
 ):
@@ -699,14 +701,41 @@ async def get_interface_api_doc(
                         "location": "query"
                     })
         
+        # 获取服务器地址和端口（从环境变量或请求头获取）
+        from app.core.config import settings
+        
+        if settings.API_SERVER_HOST:
+            # 优先使用环境变量配置的服务器IP
+            hostname = settings.API_SERVER_HOST
+            scheme = settings.API_SERVER_SCHEME
+        else:
+            # 从请求头获取
+            host_header = request.headers.get("host") if request else None
+            if host_header:
+                # 从host header中提取主机名（去掉端口）
+                hostname = host_header.split(":")[0] if ":" in host_header else host_header
+                scheme = "https" if request.headers.get("x-forwarded-proto") == "https" else "http"
+            else:
+                # 使用默认配置
+                hostname = settings.HOST if settings.HOST != "0.0.0.0" else "localhost"
+                scheme = config.proxy_schemes or "http"
+        
+        api_port = settings.API_SERVER_PORT
+        base_url = f"{scheme}://{hostname}:{api_port}"
+        
+        # 确保路径以/api开头
+        proxy_path = config.proxy_path if config.proxy_path.startswith("/") else f"/{config.proxy_path}"
+        if not proxy_path.startswith("/api"):
+            proxy_path = f"/api{proxy_path}"
+        
         # 构建API文档
         api_doc = {
             "title": config.interface_name,
             "description": config.interface_description or "无描述",
             "method": config.http_method,
-            "path": config.proxy_path,
-            "base_url": f"{config.proxy_schemes}://your-domain.com",
-            "full_url": f"{config.proxy_schemes}://your-domain.com{config.proxy_path}",
+            "path": proxy_path,
+            "base_url": base_url,
+            "full_url": f"{base_url}{proxy_path}",
             "request": {
                 "method": config.http_method,
                 "headers": {

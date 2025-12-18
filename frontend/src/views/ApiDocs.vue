@@ -148,7 +148,13 @@
             </el-descriptions-item>
           </el-descriptions>
           
-          <el-divider>cURL示例</el-divider>
+          <el-divider>
+            <span>cURL示例</span>
+            <el-button size="small" type="primary" @click="copyToClipboard(currentDoc.curl_example || '')" style="margin-left: 10px;">
+              <el-icon><DocumentCopy /></el-icon>
+              复制
+            </el-button>
+          </el-divider>
           <pre class="code-block">{{ currentDoc.curl_example || '暂无' }}</pre>
           
           <el-divider>请求参数</el-divider>
@@ -166,10 +172,22 @@
             <el-table-column prop="description" label="描述" />
           </el-table>
           
-          <el-divider>请求示例</el-divider>
+          <el-divider>
+            <span>请求示例</span>
+            <el-button size="small" type="primary" @click="copyToClipboard(JSON.stringify(currentDoc.request_sample || {}, null, 2))" style="margin-left: 10px;">
+              <el-icon><DocumentCopy /></el-icon>
+              复制
+            </el-button>
+          </el-divider>
           <pre class="code-block">{{ JSON.stringify(currentDoc.request_sample || {}, null, 2) }}</pre>
           
-          <el-divider>响应示例</el-divider>
+          <el-divider>
+            <span>响应示例</span>
+            <el-button size="small" type="primary" @click="copyToClipboard(JSON.stringify(currentDoc.response_sample || {}, null, 2))" style="margin-left: 10px;">
+              <el-icon><DocumentCopy /></el-icon>
+              复制
+            </el-button>
+          </el-divider>
           <pre class="code-block">{{ JSON.stringify(currentDoc.response_sample || {}, null, 2) }}</pre>
         </div>
         
@@ -352,6 +370,33 @@ const getMethodType = (method) => {
     PATCH: 'info'
   }
   return types[method] || 'info'
+}
+
+// 复制到剪贴板功能
+const copyToClipboard = async (text) => {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text)
+      ElMessage.success('已复制到剪贴板')
+    } else {
+      // 降级方案：使用传统方法
+      const textArea = document.createElement('textarea')
+      textArea.value = text
+      textArea.style.position = 'fixed'
+      textArea.style.left = '-999999px'
+      document.body.appendChild(textArea)
+      textArea.select()
+      try {
+        document.execCommand('copy')
+        ElMessage.success('已复制到剪贴板')
+      } catch (err) {
+        ElMessage.error('复制失败，请手动复制')
+      }
+      document.body.removeChild(textArea)
+    }
+  } catch (error) {
+    ElMessage.error('复制失败: ' + error.message)
+  }
 }
 
 onMounted(() => {

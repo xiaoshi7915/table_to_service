@@ -147,18 +147,24 @@ async def get_full_interface_doc(
                     response_sample["data"]["count"] = 1
                     response_sample["data"]["total"] = 1
     
-    # 获取服务器地址和端口（固定为8888端口，路径前加/api）
-    host_header = request.headers.get("host") if request else None
-    if host_header:
-        # 从host header中提取主机名（去掉端口）
-        hostname = host_header.split(":")[0] if ":" in host_header else host_header
-        scheme = "https" if (request and request.headers.get("x-forwarded-proto") == "https") else "http"
+    # 获取服务器地址和端口（从环境变量或请求头获取）
+    if settings.API_SERVER_HOST:
+        # 优先使用环境变量配置的服务器IP
+        hostname = settings.API_SERVER_HOST
+        scheme = settings.API_SERVER_SCHEME
     else:
-        hostname = settings.HOST if settings.HOST != "0.0.0.0" else "localhost"
-        scheme = config.proxy_schemes or "http"
+        # 从请求头获取
+        host_header = request.headers.get("host") if request else None
+        if host_header:
+            # 从host header中提取主机名（去掉端口）
+            hostname = host_header.split(":")[0] if ":" in host_header else host_header
+            scheme = "https" if (request and request.headers.get("x-forwarded-proto") == "https") else "http"
+        else:
+            hostname = settings.HOST if settings.HOST != "0.0.0.0" else "localhost"
+            scheme = config.proxy_schemes or "http"
     
-    # 固定端口为8888，路径前加/api
-    api_port = 8888
+    # 使用配置的API端口
+    api_port = settings.API_SERVER_PORT
     base_url = f"{scheme}://{hostname}:{api_port}"
     proxy_path = config.proxy_path if config.proxy_path.startswith("/") else f"/{config.proxy_path}"
     # 确保路径以/api开头
