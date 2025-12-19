@@ -62,3 +62,4 @@ backend/update_imports.py
 *.bak
 *.backup
 账号信息.txt
+*.pid

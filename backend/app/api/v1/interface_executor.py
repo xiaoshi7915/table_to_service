@@ -9,22 +9,16 @@ from app.core.database import get_local_db
 from app.models import User, InterfaceConfig, DatabaseConfig
 from app.schemas import ResponseModel
 from app.core.security import get_current_active_user, get_current_user
+from app.core.db_factory import DatabaseConnectionFactory
+from app.core.sql_dialect import SQLDialectFactory
 from loguru import logger
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
-from urllib.parse import quote_plus
 import json
 import time
+import re
 
 router = APIRouter(prefix="/api/v1/interfaces", tags=["接口执行"])
-
-
-def get_database_connection_url(db_config: DatabaseConfig) -> str:
-    """根据数据库配置生成连接URL"""
-    # 使用quote_plus正确编码密码中的特殊字符
-    encoded_password = quote_plus(db_config.password) if db_config.password else ""
-    encoded_username = quote_plus(db_config.username) if db_config.username else ""
-    return f"mysql+pymysql://{encoded_username}:{encoded_password}@{db_config.host}:{db_config.port}/{db_config.database}?charset={db_config.charset or 'utf8mb4'}"
 
 
 def check_rate_limit(interface_config: InterfaceConfig, client_ip: str) -> bool:
@@ -145,9 +139,12 @@ def execute_interface_sql(
     执行接口SQL
     """
     try:
-        # 创建数据库连接
-        db_url = get_database_connection_url(db_config)
-        engine = create_engine(db_url, pool_pre_ping=True)
+        # 获取SQL方言适配器
+        db_type = db_config.db_type or "mysql"
+        adapter = SQLDialectFactory.get_adapter(db_type)
+        
+        # 使用工厂创建数据库连接
+        engine = DatabaseConnectionFactory.create_engine(db_config)
         SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
         db = SessionLocal()
         
@@ -157,7 +154,7 @@ def execute_interface_sql(
             
             # 如果是图形模式，需要构建SQL
             if interface_config.entry_mode == "graphical":
-                sql = build_sql_from_graphical_config(interface_config, params)
+                sql = build_sql_from_graphical_config(interface_config, params, adapter)
             else:
                 # 专家模式：使用配置的SQL语句
                 sql = interface_config.sql_statement
@@ -193,9 +190,58 @@ def execute_interface_sql(
             
             # 检查最大查询数量限制（仅在非分页模式下应用）
             if not interface_config.enable_pagination and interface_config.max_query_count:
-                # 添加LIMIT限制
-                if "LIMIT" not in sql.upper():
-                    sql = f"{sql} LIMIT {interface_config.max_query_count}"
+                # 使用适配器构建LIMIT子句
+                limit_clause = adapter.build_limit_clause(limit=interface_config.max_query_count)
+                if limit_clause:
+                    # 检查SQL中是否已有LIMIT/OFFSET/FETCH等分页关键字
+                    sql_upper = sql.upper()
+                    has_limit = any(keyword in sql_upper for keyword in ["LIMIT", "OFFSET", "FETCH", "ROWNUM", "TOP "])
+                    if not has_limit:
+                        # 根据数据库类型决定LIMIT子句的位置
+                        if db_type in ["oracle"]:
+                            # Oracle的FETCH FIRST需要在ORDER BY之后
+                            if "ORDER BY" in sql_upper:
+                                # 在ORDER BY之后添加
+                                sql = re.sub(r'(\s+ORDER\s+BY\s+[^;]+)', r'\1 ' + limit_clause, sql, flags=re.IGNORECASE)
+                            else:
+                                sql = f"{sql} {limit_clause}"
+                        elif db_type in ["sqlserver"]:
+                            # SQL Server的OFFSET/FETCH需要在ORDER BY之后
+                            if "ORDER BY" in sql_upper:
+                                sql = re.sub(r'(\s+ORDER\s+BY\s+[^;]+)', r'\1 ' + limit_clause, sql, flags=re.IGNORECASE)
+                            else:
+                                # 如果没有ORDER BY，SQL Server需要添加ORDER BY
+                                sql = f"{sql} ORDER BY (SELECT NULL) {limit_clause}"
+                        else:
+                            # MySQL、PostgreSQL、SQLite等：直接在末尾添加
+                            sql = f"{sql} {limit_clause}"
+            
+            # 如果启用了分页，在SQL执行前添加分页子句
+            if interface_config.enable_pagination and page and page_size:
+                sql_upper = sql.upper()
+                sql_has_pagination = any(keyword in sql_upper for keyword in [
+                    "LIMIT", "OFFSET", "FETCH", "ROWNUM", "TOP "
+                ])
+                
+                if not sql_has_pagination:
+                    # 计算offset
+                    offset = (page - 1) * page_size
+                    limit_clause = adapter.build_limit_clause(limit=page_size, offset=offset)
+                    
+                    if limit_clause:
+                        # 根据数据库类型添加分页子句
+                        if db_type == "oracle":
+                            if "ORDER BY" in sql_upper:
+                                sql = re.sub(r'(\s+ORDER\s+BY\s+[^;]+)', r'\1 ' + limit_clause, sql, flags=re.IGNORECASE)
+                            else:
+                                sql = f"{sql} {limit_clause}"
+                        elif db_type == "sqlserver":
+                            if "ORDER BY" in sql_upper:
+                                sql = re.sub(r'(\s+ORDER\s+BY\s+[^;]+)', r'\1 ' + limit_clause, sql, flags=re.IGNORECASE)
+                            else:
+                                sql = f"{sql} ORDER BY (SELECT NULL) {limit_clause}"
+                        else:
+                            sql = f"{sql} {limit_clause}"
             
             # 记录审计日志（执行前）
             if client_ip:
@@ -208,47 +254,87 @@ def execute_interface_sql(
             result = db.execute(text(sql))
             rows = result.fetchall()
             
-            # 转换为字典列表，处理特殊类型（datetime, decimal等）
+            # 转换为字典列表，处理特殊类型（datetime, decimal, UUID等）
             columns = result.keys()
             data = []
             for row in rows:
                 row_dict = {}
                 for col, val in zip(columns, row):
+                    # 处理None
+                    if val is None:
+                        row_dict[col] = None
                     # 处理datetime类型
-                    if hasattr(val, 'isoformat'):
+                    elif hasattr(val, 'isoformat'):
                         row_dict[col] = val.isoformat()
+                    # 处理UUID类型（PostgreSQL等）
+                    elif hasattr(val, '__class__') and 'UUID' in str(type(val)):
+                        row_dict[col] = str(val)
                     # 处理decimal类型
                     elif hasattr(val, '__float__'):
                         try:
                             row_dict[col] = float(val)
                         except (ValueError, TypeError):
                             row_dict[col] = str(val)
-                    # 处理None
-                    elif val is None:
-                        row_dict[col] = None
-                    # 其他类型直接使用
+                    # 处理bytes类型（PostgreSQL bytea等）
+                    elif isinstance(val, bytes):
+                        try:
+                            # 尝试解码为UTF-8字符串
+                            row_dict[col] = val.decode('utf-8')
+                        except:
+                            # 如果解码失败，转换为base64
+                            import base64
+                            row_dict[col] = base64.b64encode(val).decode('utf-8')
+                    # 其他类型转换为字符串（确保可序列化）
                     else:
-                        row_dict[col] = val
+                        try:
+                            # 尝试直接使用
+                            json.dumps(val)  # 测试是否可序列化
+                            row_dict[col] = val
+                        except (TypeError, ValueError):
+                            # 如果不可序列化，转换为字符串
+                            row_dict[col] = str(val)
                 data.append(row_dict)
             
-            # 处理分页
+            # 注意：如果启用了分页，分页已经在SQL执行前完成（第221-248行）
+            # data已经是分页后的结果，不需要再次分页
             total = len(data)
-            if interface_config.enable_pagination and page and page_size:
-                start = (page - 1) * page_size
-                end = start + page_size
-                data = data[start:end]
             
             # 如果需要返回总数，执行COUNT查询
             total_count = total
             if interface_config.return_total_count:
-                # 构建COUNT查询（使用原始SQL，不包含LIMIT）
+                # 构建COUNT查询（使用原始SQL，不包含分页子句）
                 count_sql = sql
-                # 移除LIMIT子句（如果存在）
-                import re
-                count_sql = re.sub(r'\s+LIMIT\s+\d+(\s+OFFSET\s+\d+)?', '', count_sql, flags=re.IGNORECASE)
-                count_sql = f"SELECT COUNT(*) as total FROM ({count_sql}) as subquery"
-                count_result = db.execute(text(count_sql))
-                total_count = count_result.scalar() or total
+                
+                # 移除各种分页子句（根据数据库类型）
+                if db_type == "sqlserver":
+                    # SQL Server: 移除 OFFSET ... ROWS FETCH NEXT ... ROWS ONLY
+                    count_sql = re.sub(r'\s+OFFSET\s+\d+\s+ROWS\s+FETCH\s+NEXT\s+\d+\s+ROWS\s+ONLY', '', count_sql, flags=re.IGNORECASE)
+                    # 移除 TOP n
+                    count_sql = re.sub(r'\s+TOP\s+\d+', '', count_sql, flags=re.IGNORECASE)
+                elif db_type == "oracle":
+                    # Oracle: 移除 FETCH FIRST ... ROWS ONLY 和 OFFSET ... ROWS
+                    count_sql = re.sub(r'\s+OFFSET\s+\d+\s+ROWS\s+FETCH\s+FIRST\s+\d+\s+ROWS\s+ONLY', '', count_sql, flags=re.IGNORECASE)
+                    count_sql = re.sub(r'\s+FETCH\s+FIRST\s+\d+\s+ROWS\s+ONLY', '', count_sql, flags=re.IGNORECASE)
+                    # 移除 ROWNUM条件
+                    count_sql = re.sub(r'\s+AND\s+ROWNUM\s*[<>=]+\s*\d+', '', count_sql, flags=re.IGNORECASE)
+                else:
+                    # MySQL、PostgreSQL、SQLite: 移除 LIMIT n OFFSET m
+                    count_sql = re.sub(r'\s+LIMIT\s+\d+(\s+OFFSET\s+\d+)?', '', count_sql, flags=re.IGNORECASE)
+                
+                # 构建COUNT查询
+                # 对于Oracle，可能需要特殊处理
+                if db_type == "oracle":
+                    # Oracle的COUNT查询可能需要特殊处理
+                    count_sql = f"SELECT COUNT(*) as total FROM ({count_sql})"
+                else:
+                    count_sql = f"SELECT COUNT(*) as total FROM ({count_sql}) as subquery"
+                
+                try:
+                    count_result = db.execute(text(count_sql))
+                    total_count = count_result.scalar() or total
+                except Exception as e:
+                    logger.warning(f"执行COUNT查询失败，使用数据长度作为总数: {e}")
+                    total_count = total
             
             # 构建返回结果
             result = {
@@ -273,22 +359,28 @@ def execute_interface_sql(
         raise
 
 
-def escape_identifier(identifier: str) -> str:
-    """转义SQL标识符（字段名、表名），使用反引号包裹以避免与保留关键字冲突"""
-    if not identifier:
-        return identifier
-    # 如果已经包含反引号，直接返回
-    if identifier.startswith("`") and identifier.endswith("`"):
-        return identifier
-    return f"`{identifier}`"
-
-
-def build_sql_from_graphical_config(interface_config: InterfaceConfig, params: Dict[str, Any]) -> str:
-    """从图形配置构建SQL"""
+def build_sql_from_graphical_config(
+    interface_config: InterfaceConfig, 
+    params: Dict[str, Any],
+    adapter: Optional[Any] = None
+) -> str:
+    """
+    从图形配置构建SQL
+    
+    Args:
+        interface_config: 接口配置对象
+        params: 参数字典
+        adapter: SQL方言适配器（如果为None，则使用MySQL适配器）
+    """
+    # 如果没有提供适配器，使用MySQL适配器（向后兼容）
+    if adapter is None:
+        from app.core.sql_dialect import SQLDialectFactory
+        adapter = SQLDialectFactory.get_adapter("mysql")
+    
     # 构建SELECT字段
     if interface_config.selected_fields:
-        # 为每个字段名添加反引号
-        fields = ", ".join([escape_identifier(field) for field in interface_config.selected_fields])
+        # 使用适配器转义字段名
+        fields = ", ".join([adapter.escape_identifier(field) for field in interface_config.selected_fields])
     else:
         fields = "*"
     
@@ -297,8 +389,8 @@ def build_sql_from_graphical_config(interface_config: InterfaceConfig, params: D
     if not table_name:
         raise ValueError("表名不能为空")
     
-    # 为表名添加反引号
-    escaped_table_name = escape_identifier(table_name)
+    # 使用适配器转义表名
+    escaped_table_name = adapter.escape_identifier(table_name)
     sql = f"SELECT {fields} FROM {escaped_table_name}"
     
     # 构建WHERE子句
@@ -316,8 +408,8 @@ def build_sql_from_graphical_config(interface_config: InterfaceConfig, params: D
             if not field:
                 continue
             
-            # 转义字段名
-            escaped_field = escape_identifier(field)
+            # 使用适配器转义字段名
+            escaped_field = adapter.escape_identifier(field)
             
             # 构建条件表达式
             if operator == "equal":
@@ -414,11 +506,15 @@ def build_sql_from_graphical_config(interface_config: InterfaceConfig, params: D
             field = order.get("field")
             direction = order.get("direction", "ASC")
             if field:
-                # 转义字段名
-                escaped_field = escape_identifier(field)
+                # 使用适配器转义字段名
+                escaped_field = adapter.escape_identifier(field)
                 order_parts.append(f"{escaped_field} {direction}")
         if order_parts:
             sql += " ORDER BY " + ", ".join(order_parts)
+    
+    # 如果启用分页，添加分页子句
+    # 注意：这里不处理分页，分页在execute_interface_sql中处理
+    # 但如果有需要，可以在这里添加
     
     return sql
 

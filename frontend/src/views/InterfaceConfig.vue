@@ -888,10 +888,17 @@ const loadTables = async () => {
   try {
     const res = await api.get(`/database-configs/${formData.database_config_id}/tables`)
     if (res.data.success) {
-      tables.value = res.data.data || []
+      const tableList = res.data.data || []
+      tables.value = Array.isArray(tableList) ? tableList : []
+      console.log('加载表列表成功:', tables.value.length, '个表', tables.value)
+    } else {
+      ElMessage.warning('加载表列表失败: ' + (res.data.message || '未知错误'))
+      tables.value = []
     }
   } catch (error) {
-    ElMessage.error('加载表列表失败: ' + (error.response?.data?.detail || error.message))
+    console.error('加载表列表错误:', error)
+    ElMessage.error('加载表列表失败: ' + (error.response?.data?.detail || error.response?.data?.message || error.message))
+    tables.value = []
   } finally {
     loadingTables.value = false
   }

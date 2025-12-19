@@ -5,7 +5,7 @@
 ## ✨ 功能特性
 
 - 🔐 **用户认证**：JWT Token 认证机制
-- 🗄️ **数据源管理**：支持配置多个数据库连接
+- 🗄️ **多数据源支持**：支持MySQL、PostgreSQL、SQLite、SQL Server、Oracle等多种数据库
 - 📊 **表转接口**：专家模式和图形模式两种配置方式
 - 🔍 **SQL解析**：自动解析SQL参数，生成接口文档
 - 🛡️ **风险管控**：支持白名单、黑名单、限流、审计日志等
@@ -65,6 +65,15 @@ cd ..
 ### 2. 配置数据源
 
 在"数据源配置"页面添加要连接的数据库连接信息。
+
+**支持的数据库类型**：
+- MySQL / MariaDB
+- PostgreSQL
+- SQLite
+- SQL Server
+- Oracle
+
+选择数据库类型后，系统会自动调整连接参数和默认端口。
 
 ### 3. 创建接口
 
@@ -136,8 +145,9 @@ table_to_service/
 - Python 3.11+
 - FastAPI
 - SQLAlchemy
-- MySQL 8.0
+- 多数据库支持：MySQL、PostgreSQL、SQLite、SQL Server、Oracle
 - JWT认证
+- 密码加密（Fernet）
 
 ### 前端
 - Vue 3
@@ -164,6 +174,8 @@ table_to_service/
 - [服务管理说明](服务管理说明.md)
 - [Nginx配置说明](配置nginx代理.md)
 - [安全说明](SECURITY.md)
+- [密码安全说明](密码安全说明.md)
+- [多数据源测试总结](多数据源测试完成总结.md)
 
 ## 🤝 贡献
 

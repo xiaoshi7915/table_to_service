@@ -38,6 +38,13 @@
         :header-cell-style="{ background: '#f5f7fa', color: '#606266', fontWeight: '600' }"
       >
         <el-table-column prop="name" label="配置名称" width="150" />
+        <el-table-column prop="db_type" label="数据库类型" width="120">
+          <template #default="{ row }">
+            <el-tag :type="getDbTypeTagType(row.db_type)">
+              {{ getDbTypeLabel(row.db_type) }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="host" label="主机" />
         <el-table-column prop="port" label="端口" width="80" />
         <el-table-column prop="database" label="数据库" />
@@ -98,23 +105,55 @@
           <el-input v-model="form.name" placeholder="请输入配置名称" />
         </el-form-item>
         
-        <el-form-item label="主机地址" prop="host">
+        <el-form-item label="数据库类型" prop="db_type">
+          <el-select v-model="form.db_type" placeholder="请选择数据库类型" @change="handleDbTypeChange" style="width: 100%">
+            <el-option label="MySQL" value="mysql" />
+            <el-option label="PostgreSQL" value="postgresql" />
+            <el-option label="SQLite" value="sqlite" />
+            <el-option label="SQL Server" value="sqlserver" />
+            <el-option label="Oracle" value="oracle" />
+          </el-select>
+        </el-form-item>
+        
+        <el-form-item 
+          v-if="form.db_type !== 'sqlite'" 
+          label="主机地址" 
+          prop="host"
+        >
           <el-input v-model="form.host" placeholder="localhost 或 IP地址" />
         </el-form-item>
         
-        <el-form-item label="端口" prop="port">
+        <el-form-item 
+          v-if="form.db_type !== 'sqlite'" 
+          label="端口" 
+          prop="port"
+        >
           <el-input-number v-model="form.port" :min="1" :max="65535" />
         </el-form-item>
         
-        <el-form-item label="数据库名" prop="database">
-          <el-input v-model="form.database" placeholder="请输入数据库名" />
+        <el-form-item 
+          :label="form.db_type === 'sqlite' ? '数据库文件路径' : '数据库名'" 
+          prop="database"
+        >
+          <el-input 
+            v-model="form.database" 
+            :placeholder="form.db_type === 'sqlite' ? '请输入数据库文件路径' : '请输入数据库名'" 
+          />
         </el-form-item>
         
-        <el-form-item label="用户名" prop="username">
+        <el-form-item 
+          v-if="form.db_type !== 'sqlite'" 
+          label="用户名" 
+          prop="username"
+        >
           <el-input v-model="form.username" placeholder="请输入用户名" />
         </el-form-item>
         
-        <el-form-item label="密码" prop="password">
+        <el-form-item 
+          v-if="form.db_type !== 'sqlite'" 
+          label="密码" 
+          prop="password"
+        >
           <el-input
             v-model="form.password"
             type="password"
@@ -123,7 +162,10 @@
           />
         </el-form-item>
         
-        <el-form-item label="字符集">
+        <el-form-item 
+          v-if="form.db_type === 'mysql'" 
+          label="字符集"
+        >
           <el-input v-model="form.charset" placeholder="utf8mb4" />
         </el-form-item>
         
@@ -162,22 +204,127 @@ const formRef = ref(null)
 const form = reactive({
   id: null,
   name: '',
+  db_type: 'mysql',
   host: '',
   port: 3306,
   database: '',
   username: '',
   password: '',
   charset: 'utf8mb4',
+  extra_params: null,
   is_active: true
 })
 
+// 数据库类型默认端口映射
+const dbTypePorts = {
+  mysql: 3306,
+  postgresql: 5432,
+  sqlite: null,
+  sqlserver: 1433,
+  oracle: 1521
+}
+
+// 数据库类型标签映射
+const dbTypeLabels = {
+  mysql: 'MySQL',
+  postgresql: 'PostgreSQL',
+  sqlite: 'SQLite',
+  sqlserver: 'SQL Server',
+  oracle: 'Oracle'
+}
+
+// 数据库类型标签颜色映射
+const dbTypeTagTypes = {
+  mysql: 'success',
+  postgresql: 'primary',
+  sqlite: 'info',
+  sqlserver: 'warning',
+  oracle: 'danger'
+}
+
+const getDbTypeLabel = (dbType) => {
+  return dbTypeLabels[dbType] || dbType || 'MySQL'
+}
+
+const getDbTypeTagType = (dbType) => {
+  return dbTypeTagTypes[dbType] || 'success'
+}
+
+const handleDbTypeChange = (dbType) => {
+  // 根据数据库类型设置默认端口
+  if (dbType !== 'sqlite' && dbTypePorts[dbType]) {
+    form.port = dbTypePorts[dbType]
+  }
+}
+
 const rules = {
   name: [{ required: true, message: '请输入配置名称', trigger: 'blur' }],
-  host: [{ required: true, message: '请输入主机地址', trigger: 'blur' }],
-  port: [{ required: true, message: '请输入端口', trigger: 'blur' }],
-  database: [{ required: true, message: '请输入数据库名', trigger: 'blur' }],
-  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
+  db_type: [{ required: true, message: '请选择数据库类型', trigger: 'change' }],
+  host: [
+    { 
+      required: true, 
+      message: '请输入主机地址', 
+      trigger: 'blur',
+      validator: (rule, value, callback) => {
+        if (form.db_type === 'sqlite') {
+          callback()
+        } else if (!value) {
+          callback(new Error('请输入主机地址'))
+        } else {
+          callback()
+        }
+      }
+    }
+  ],
+  port: [
+    { 
+      required: true, 
+      message: '请输入端口', 
+      trigger: 'blur',
+      validator: (rule, value, callback) => {
+        if (form.db_type === 'sqlite') {
+          callback()
+        } else if (!value) {
+          callback(new Error('请输入端口'))
+        } else {
+          callback()
+        }
+      }
+    }
+  ],
+  database: [{ required: true, message: '请输入数据库名或文件路径', trigger: 'blur' }],
+  username: [
+    { 
+      required: true, 
+      message: '请输入用户名', 
+      trigger: 'blur',
+      validator: (rule, value, callback) => {
+        if (form.db_type === 'sqlite') {
+          callback()
+        } else if (!value) {
+          callback(new Error('请输入用户名'))
+        } else {
+          callback()
+        }
+      }
+    }
+  ],
+  password: [
+    { 
+      required: true, 
+      message: '请输入密码', 
+      trigger: 'blur',
+      validator: (rule, value, callback) => {
+        if (form.db_type === 'sqlite') {
+          callback()
+        } else if (!value) {
+          callback(new Error('请输入密码'))
+        } else {
+          callback()
+        }
+      }
+    }
+  ]
 }
 
 const pagination = ref({
@@ -236,12 +383,14 @@ const handleEdit = (row) => {
   Object.assign(form, {
     id: row.id,
     name: row.name,
+    db_type: row.db_type || 'mysql',
     host: row.host,
     port: row.port,
     database: row.database,
     username: row.username,
     password: '', // 编辑时不显示密码
     charset: row.charset || 'utf8mb4',
+    extra_params: row.extra_params || null,
     is_active: row.is_active
   })
   dialogVisible.value = true
@@ -252,12 +401,14 @@ const handleCopy = (row) => {
   Object.assign(form, {
     id: null,
     name: `${row.name}_副本`,
+    db_type: row.db_type || 'mysql',
     host: row.host,
     port: row.port,
     database: row.database,
     username: row.username,
     password: '', // 复制时需要重新输入密码
     charset: row.charset || 'utf8mb4',
+    extra_params: row.extra_params || null,
     is_active: false
   })
   dialogVisible.value = true
@@ -298,16 +449,21 @@ const handleTest = async (row) => {
 const handleTestConnection = async () => {
   if (!formRef.value) return
   
-  // 只验证必填项
+  // 根据数据库类型验证必填项
+  const fieldsToValidate = ['name', 'db_type', 'database']
+  if (form.db_type !== 'sqlite') {
+    fieldsToValidate.push('host', 'port', 'username', 'password')
+  }
+  
   try {
-    await formRef.value.validateField(['host', 'port', 'database', 'username', 'password'])
+    await formRef.value.validateField(fieldsToValidate)
   } catch {
     ElMessage.warning('请先填写完整的连接信息')
     return
   }
   
-  // 检查密码是否为空
-  if (!form.password || form.password.trim() === '') {
+  // 对于非SQLite数据库，检查密码是否为空
+  if (form.db_type !== 'sqlite' && (!form.password || form.password.trim() === '')) {
     ElMessage.warning('请输入密码才能测试连接')
     return
   }
@@ -316,17 +472,20 @@ const handleTestConnection = async () => {
   try {
     // 直接测试连接（不保存配置）
     const testConfig = {
+      db_type: form.db_type,
       host: form.host,
       port: form.port,
       database: form.database,
       username: form.username,
       password: form.password,
-      charset: form.charset || 'utf8mb4'
+      charset: form.charset || 'utf8mb4',
+      extra_params: form.extra_params
     }
     
     const response = await api.post('/database-configs/test', testConfig)
     if (response.data.success) {
       ElMessage.success('连接测试成功')
+      // 安全：测试成功后不清除密码（用户可能还要保存配置）
     } else {
       ElMessage.error(response.data.message || '连接测试失败')
     }
@@ -345,6 +504,8 @@ const handleTestConnection = async () => {
     }
   } finally {
     testing.value = false
+    // 注意：密码在HTTP请求中会以明文传输（如果使用HTTPS则传输层加密）
+    // 这是测试连接的必要行为，但请确保使用HTTPS协议
   }
 }
 
@@ -357,11 +518,13 @@ const handleSubmit = async () => {
       try {
         const submitData = {
           name: form.name,
+          db_type: form.db_type,
           host: form.host,
           port: form.port,
           database: form.database,
           username: form.username,
           charset: form.charset || 'utf8mb4',
+          extra_params: form.extra_params,
           is_active: form.is_active
         }
         
@@ -394,12 +557,14 @@ const resetForm = () => {
   Object.assign(form, {
     id: null,
     name: '',
+    db_type: 'mysql',
     host: '',
     port: 3306,
     database: '',
     username: '',
     password: '',
     charset: 'utf8mb4',
+    extra_params: null,
     is_active: true
   })
   formRef.value?.clearValidate()

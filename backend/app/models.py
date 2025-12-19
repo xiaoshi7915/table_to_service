@@ -30,12 +30,16 @@ class DatabaseConfig(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, comment="用户ID")
     name = Column(String(100), nullable=False, comment="配置名称")
+    # 数据库类型：mysql/postgresql/sqlite/sqlserver/oracle
+    db_type = Column(String(50), default="mysql", nullable=False, comment="数据库类型")
     host = Column(String(255), nullable=False, comment="数据库主机")
     port = Column(Integer, default=3306, comment="数据库端口")
     database = Column(String(100), nullable=False, comment="数据库名")
     username = Column(String(100), nullable=False, comment="数据库用户名")
     password = Column(String(255), nullable=False, comment="数据库密码")
     charset = Column(String(20), default="utf8mb4", comment="字符集")
+    # 额外连接参数（JSON格式，如SSL配置、连接池参数等）
+    extra_params = Column(JSON, nullable=True, comment="额外连接参数（JSON格式）")
     is_active = Column(Boolean, default=True, comment="是否激活")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")

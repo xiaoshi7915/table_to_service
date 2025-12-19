@@ -290,7 +290,7 @@
           <span style="margin-left: 8px;">请求参数</span>
         </el-divider>
         <el-table 
-          v-if="apiDoc.request.parameters && apiDoc.request.parameters.length > 0"
+          v-if="apiDoc.request && apiDoc.request.parameters && apiDoc.request.parameters.length > 0"
           :data="apiDoc.request.parameters" 
           border
           style="width: 100%"
@@ -315,7 +315,7 @@
           <el-tabs type="border-card">
             <el-tab-pane :label="apiDoc.method === 'GET' ? 'Query参数' : '请求体'">
               <div style="position: relative;">
-                <pre class="code-block-light">{{ JSON.stringify(apiDoc.request.sample, null, 2) }}</pre>
+                <pre class="code-block-light">{{ JSON.stringify(apiDoc.request?.sample || {}, null, 2) }}</pre>
               </div>
             </el-tab-pane>
             <el-tab-pane label="cURL示例">
@@ -329,13 +329,13 @@
         <el-divider>
           <el-icon><SuccessFilled /></el-icon>
           <span style="margin-left: 8px;">响应示例</span>
-          <el-button size="small" type="primary" @click="copyToClipboard(JSON.stringify(apiDoc.response.sample, null, 2))" style="margin-left: 10px;">
+          <el-button size="small" type="primary" @click="copyToClipboard(JSON.stringify(apiDoc.response?.sample || {}, null, 2))" style="margin-left: 10px;">
             <el-icon><DocumentCopy /></el-icon>
             复制
           </el-button>
         </el-divider>
         <el-card class="example-card" shadow="hover">
-          <pre class="code-block-light">{{ JSON.stringify(apiDoc.response.sample, null, 2) }}</pre>
+          <pre class="code-block-light">{{ JSON.stringify(apiDoc.response?.sample || {}, null, 2) }}</pre>
         </el-card>
         
         <el-divider>
@@ -345,13 +345,13 @@
         <el-card class="api-info-card" shadow="never">
           <el-descriptions :column="2" border>
             <el-descriptions-item label="分页">
-              <el-tag :type="apiDoc.pagination.enabled ? 'success' : 'info'">
-                {{ apiDoc.pagination.enabled ? '启用' : '禁用' }}
+              <el-tag :type="apiDoc.pagination?.enabled ? 'success' : 'info'">
+                {{ apiDoc.pagination?.enabled ? '启用' : '禁用' }}
               </el-tag>
             </el-descriptions-item>
             <el-descriptions-item label="认证">
-              <el-tag :type="apiDoc.authentication.required ? 'warning' : 'success'">
-                {{ apiDoc.authentication.required ? apiDoc.authentication.type : '无需认证' }}
+              <el-tag :type="apiDoc.authentication?.required ? 'warning' : 'success'">
+                {{ apiDoc.authentication?.required ? apiDoc.authentication.type : '无需认证' }}
               </el-tag>
             </el-descriptions-item>
           </el-descriptions>
@@ -667,56 +667,84 @@ const interfaceFullUrl = ref('')
 
 const handleView = async (row) => {
   try {
+    // 加载接口配置详情
     const res = await api.get(`/interface-configs/${row.id}`)
-    if (res.data.success) {
-      currentInterface.value = res.data.data
-      
-      // 获取完整URL（从API文档接口）
-      try {
-        const apiDocRes = await api.get(`/interface-configs/${row.id}/api-doc`)
-        if (apiDocRes.data.success && apiDocRes.data.data.full_url) {
-          interfaceFullUrl.value = apiDocRes.data.data.full_url
-        }
-      } catch (e) {
-        console.warn('获取完整URL失败，使用默认构建:', e)
+    if (!res.data || !res.data.success) {
+      const errorMsg = res.data?.message || res.data?.detail || '获取接口配置失败'
+      ElMessage.error(errorMsg)
+      return
+    }
+    
+    currentInterface.value = res.data.data
+    
+    // 获取完整URL（从API文档接口）
+    try {
+      const apiDocRes = await api.get(`/interface-configs/${row.id}/api-doc`)
+      if (apiDocRes.data && apiDocRes.data.success && apiDocRes.data.data && apiDocRes.data.data.full_url) {
+        interfaceFullUrl.value = apiDocRes.data.data.full_url
+      } else {
+        // 如果API文档接口失败，使用备用方法构建URL
         interfaceFullUrl.value = getInterfaceFullUrl(currentInterface.value)
       }
-      
-      // 加载样例数据
-      try {
-        const samplesRes = await api.get(`/interface-configs/${row.id}/samples`)
-        if (samplesRes.data.success) {
-          requestSample.value = samplesRes.data.data.request_sample || {}
-          responseSample.value = samplesRes.data.data.response_sample || null
-        }
-      } catch (e) {
-        console.error('加载样例数据失败:', e)
+    } catch (e) {
+      console.warn('获取完整URL失败，使用默认构建:', e)
+      interfaceFullUrl.value = getInterfaceFullUrl(currentInterface.value)
+    }
+    
+    // 加载样例数据
+    try {
+      const samplesRes = await api.get(`/interface-configs/${row.id}/samples`)
+      if (samplesRes.data && samplesRes.data.success) {
+        requestSample.value = samplesRes.data.data?.request_sample || {}
+        responseSample.value = samplesRes.data.data?.response_sample || null
+      } else {
+        // 如果获取样例数据失败，使用空值
         requestSample.value = {}
         responseSample.value = null
       }
-      
-      // 尝试获取实际响应数据作为示例
-      try {
-        const executeRes = await api.get(`/interfaces/${row.id}/execute`, {
-          params: { pageNumber: 1, pageSize: 1 }
-        })
-        if (executeRes.data.success && executeRes.data.data) {
-          // 使用实际响应数据更新示例
-          responseSample.value = {
-            success: executeRes.data.success,
-            message: executeRes.data.message,
-            data: executeRes.data.data
+    } catch (e) {
+      console.warn('加载样例数据失败，使用默认值:', e)
+      requestSample.value = {}
+      responseSample.value = null
+    }
+    
+    // 尝试获取实际响应数据作为示例（可选，失败不影响主流程）
+    try {
+      const executeRes = await api.get(`/interfaces/${row.id}/execute`, {
+        params: { pageNumber: 1, pageSize: 1 },
+        timeout: 5000 // 设置5秒超时，避免长时间等待
+      })
+      if (executeRes.data && executeRes.data.success && executeRes.data.data) {
+        // 使用实际响应数据更新示例
+        responseSample.value = {
+          success: executeRes.data.success,
+          message: executeRes.data.message,
+          data: executeRes.data.data
+        }
+      }
+    } catch (e) {
+      // 如果获取实际数据失败，使用默认示例（不影响主流程）
+      console.warn('获取实际响应数据失败，使用默认示例:', e)
+      // 如果还没有响应样例，使用默认样例
+      if (!responseSample.value) {
+        responseSample.value = {
+          success: true,
+          message: '执行成功',
+          data: {
+            data: [],
+            count: 0,
+            total: 0
           }
         }
-      } catch (e) {
-        // 如果获取实际数据失败，使用默认示例
-        console.warn('获取实际响应数据失败，使用默认示例:', e)
       }
-      
-      detailDialogVisible.value = true
     }
+    
+    // 显示详情对话框
+    detailDialogVisible.value = true
   } catch (error) {
-    ElMessage.error('加载接口详情失败: ' + (error.response?.data?.detail || error.message))
+    console.error('加载接口详情失败:', error)
+    const errorMsg = error.response?.data?.detail || error.response?.data?.message || error.message || '加载接口详情失败'
+    ElMessage.error(errorMsg)
   }
 }
 
@@ -749,51 +777,81 @@ const getInterfaceFullUrl = (interfaceConfig) => {
 
 const handleViewApiDoc = async (row) => {
   try {
+    // 加载API文档
     const res = await api.get(`/interface-configs/${row.id}/api-doc`)
-    if (res.data.success) {
-      apiDoc.value = res.data.data
-      
-      // 尝试获取实际响应数据作为示例
-      try {
-        const executeRes = await api.get(`/interfaces/${row.id}/execute`, {
-          params: { pageNumber: 1, pageSize: 1 }
-        })
-        if (executeRes.data.success && executeRes.data.data) {
-          // 使用实际响应数据更新示例
-          apiDoc.value.response.sample = {
-            success: executeRes.data.success,
-            message: executeRes.data.message,
-            data: executeRes.data.data
+    if (!res.data || !res.data.success) {
+      const errorMsg = res.data?.message || res.data?.detail || '获取API文档失败'
+      ElMessage.error(errorMsg)
+      return
+    }
+    
+    apiDoc.value = res.data.data
+    
+    // 尝试获取实际响应数据作为示例（可选，失败不影响主流程）
+    try {
+      const executeRes = await api.get(`/interfaces/${row.id}/execute`, {
+        params: { pageNumber: 1, pageSize: 1 },
+        timeout: 5000 // 设置5秒超时，避免长时间等待
+      })
+      if (executeRes.data && executeRes.data.success && executeRes.data.data) {
+        // 使用实际响应数据更新示例
+        if (!apiDoc.value.response) {
+          apiDoc.value.response = {}
+        }
+        apiDoc.value.response.sample = {
+          success: executeRes.data.success,
+          message: executeRes.data.message,
+          data: executeRes.data.data
+        }
+      }
+    } catch (e) {
+      // 如果获取实际数据失败，使用默认示例（不影响主流程）
+      console.warn('获取实际响应数据失败，使用默认示例:', e)
+      // 确保有默认的响应样例
+      if (!apiDoc.value.response || !apiDoc.value.response.sample) {
+        if (!apiDoc.value.response) {
+          apiDoc.value.response = {}
+        }
+        apiDoc.value.response.sample = {
+          success: true,
+          message: '执行成功',
+          data: {
+            data: [],
+            count: 0,
+            total: 0
           }
         }
-      } catch (e) {
-        // 如果获取实际数据失败，使用默认示例
-        console.warn('获取实际响应数据失败，使用默认示例:', e)
       }
-      
-      apiDocDialogVisible.value = true
     }
+    
+    // 显示API文档对话框
+    apiDocDialogVisible.value = true
   } catch (error) {
-    ElMessage.error('加载API文档失败: ' + (error.response?.data?.detail || error.message))
+    console.error('加载API文档失败:', error)
+    const errorMsg = error.response?.data?.detail || error.response?.data?.message || error.message || '加载API文档失败'
+    ElMessage.error(errorMsg)
   }
 }
 
 const generateCurlExample = (doc) => {
   if (!doc) return ''
   
-  let curl = `curl -X ${doc.method} "${doc.full_url}"`
+  const method = doc.method || 'GET'
+  const fullUrl = doc.full_url || ''
+  let curl = `curl -X ${method} "${fullUrl}"`
   
-  if (doc.request.headers) {
+  if (doc.request?.headers) {
     Object.entries(doc.request.headers).forEach(([key, value]) => {
       curl += ` \\\n  -H "${key}: ${value}"`
     })
   }
   
-  if (doc.method === 'POST' && Object.keys(doc.request.sample).length > 0) {
-    curl += ` \\\n  -d '${JSON.stringify(doc.request.sample)}'`
-  } else if (doc.method === 'GET' && Object.keys(doc.request.sample).length > 0) {
-    const params = new URLSearchParams(doc.request.sample).toString()
-    curl = `curl -X ${doc.method} "${doc.full_url}?${params}"`
+  const requestSample = doc.request?.sample || {}
+  if (method === 'POST' && Object.keys(requestSample).length > 0) {
+    curl += ` \\\n  -d '${JSON.stringify(requestSample)}'`
+  } else if (method === 'GET' && Object.keys(requestSample).length > 0) {
+    const params = new URLSearchParams(requestSample).toString()
+    curl = `curl -X ${method} "${fullUrl}?${params}"`
   }
   
   return curl
@@ -805,62 +863,83 @@ const handleEdit = (row) => {
 
 const handleExecute = async (row) => {
   try {
+    // 加载接口配置详情
     const res = await api.get(`/interface-configs/${row.id}`)
-    if (res.data.success) {
-      currentInterface.value = res.data.data
-      
-      // 加载请求参数
-      if (currentInterface.value.entry_mode === 'expert') {
-        // 专家模式：从SQL中解析参数
-        try {
+    if (!res.data || !res.data.success) {
+      const errorMsg = res.data?.message || res.data?.detail || '获取接口配置失败'
+      ElMessage.error(errorMsg)
+      return
+    }
+    
+    currentInterface.value = res.data.data
+    
+    // 加载请求参数
+    if (currentInterface.value.entry_mode === 'expert') {
+      // 专家模式：从SQL中解析参数
+      try {
+        if (currentInterface.value.sql_statement) {
           const parseRes = await api.post('/interface-configs/parse-sql', {
             sql: currentInterface.value.sql_statement
           })
-          if (parseRes.data.success) {
-            requestParameters.value = parseRes.data.data.request_parameters || []
+          if (parseRes.data && parseRes.data.success) {
+            requestParameters.value = parseRes.data.data?.request_parameters || []
+          } else {
+            requestParameters.value = []
           }
-        } catch (e) {
+        } else {
           requestParameters.value = []
         }
-      } else {
-        // 图形模式：从配置中获取参数
+      } catch (e) {
+        console.warn('解析SQL参数失败:', e)
         requestParameters.value = []
-        if (currentInterface.value.where_conditions) {
-          currentInterface.value.where_conditions.forEach((cond, idx) => {
-            if (cond.value_type === 'variable' && cond.variable_name) {
-              requestParameters.value.push({
-                name: cond.variable_name,
-                type: 'string',
-                description: cond.description || '',
-                constraint: 'required',
-                location: 'query'
-              })
-            }
-          })
-        }
       }
-      
-      // 初始化执行参数
-      Object.keys(executeParams).forEach(key => delete executeParams[key])
-      requestParameters.value.forEach(param => {
-        executeParams[param.name] = ''
-      })
-      if (currentInterface.value.enable_pagination) {
-        executeParams.page = 1
-        executeParams.page_size = 10
+    } else {
+      // 图形模式：从配置中获取参数
+      requestParameters.value = []
+      if (currentInterface.value.where_conditions && Array.isArray(currentInterface.value.where_conditions)) {
+        currentInterface.value.where_conditions.forEach((cond, idx) => {
+          if (cond && cond.value_type === 'variable' && cond.variable_name) {
+            requestParameters.value.push({
+              name: cond.variable_name,
+              type: 'string',
+              description: cond.description || '',
+              constraint: 'required',
+              location: 'query'
+            })
+          }
+        })
       }
-      
-      executeResult.value = null
-      dataFormat.value = 'table' // 重置数据格式为表格
-      executeDialogVisible.value = true
+      // 如果接口配置中有保存的请求参数，优先使用
+      if (currentInterface.value.request_parameters && Array.isArray(currentInterface.value.request_parameters)) {
+        requestParameters.value = currentInterface.value.request_parameters
+      }
     }
+    
+    // 初始化执行参数
+    Object.keys(executeParams).forEach(key => delete executeParams[key])
+    requestParameters.value.forEach(param => {
+      executeParams[param.name] = ''
+    })
+    if (currentInterface.value.enable_pagination) {
+      executeParams.page = 1
+      executeParams.page_size = 10
+    }
+    
+    executeResult.value = null
+    dataFormat.value = 'table' // 重置数据格式为表格
+    executeDialogVisible.value = true
   } catch (error) {
-    ElMessage.error('加载接口详情失败: ' + (error.response?.data?.detail || error.message))
+    console.error('加载接口详情失败:', error)
+    const errorMsg = error.response?.data?.detail || error.response?.data?.message || error.message || '加载接口详情失败'
+    ElMessage.error(errorMsg)
   }
 }
 
 const doExecute = async () => {
-  if (!currentInterface.value) return
+  if (!currentInterface.value) {
+    ElMessage.error('接口配置不存在')
+    return
+  }
   
   executing.value = true
   try {
@@ -874,24 +953,46 @@ const doExecute = async () => {
     
     let res
     if (currentInterface.value.http_method === 'POST') {
-      res = await api.post(`/interfaces/${currentInterface.value.id}/execute`, params)
+      res = await api.post(`/interfaces/${currentInterface.value.id}/execute`, params, {
+        timeout: 30000 // 30秒超时
+      })
     } else {
-      const queryString = new URLSearchParams(params).toString()
-      res = await api.get(`/interfaces/${currentInterface.value.id}/execute?${queryString}`)
+      // GET请求：将参数作为查询参数
+      const queryParams = new URLSearchParams()
+      Object.keys(params).forEach(key => {
+        if (params[key] !== null && params[key] !== undefined && params[key] !== '') {
+          queryParams.append(key, params[key])
+        }
+      })
+      const queryString = queryParams.toString()
+      const url = queryString 
+        ? `/interfaces/${currentInterface.value.id}/execute?${queryString}`
+        : `/interfaces/${currentInterface.value.id}/execute`
+      res = await api.get(url, {
+        timeout: 30000 // 30秒超时
+      })
+    }
+    
+    if (!res.data) {
+      throw new Error('响应数据为空')
     }
     
     executeResult.value = res.data
     if (res.data.success) {
       ElMessage.success('执行成功')
     } else {
-      ElMessage.error(res.data.message || '执行失败')
+      const errorMsg = res.data.message || res.data.detail || '执行失败'
+      ElMessage.warning(errorMsg)
     }
   } catch (error) {
+    console.error('执行接口失败:', error)
+    const errorMsg = error.response?.data?.detail || error.response?.data?.message || error.message || '执行失败'
     executeResult.value = {
       success: false,
-      message: error.response?.data?.detail || error.message || '执行失败'
+      message: errorMsg,
+      data: null
     }
-    ElMessage.error('执行失败: ' + (error.response?.data?.detail || error.message))
+    ElMessage.error('执行失败: ' + errorMsg)
   } finally {
     executing.value = false
   }
@@ -1055,7 +1156,8 @@ const copyToClipboard = async (text) => {
 const copyRequestExample = (apiDoc) => {
   // 这里可以根据当前选中的tab来决定复制什么
   // 暂时复制JSON格式的请求示例
-  const text = JSON.stringify(apiDoc.request.sample, null, 2)
+  const requestSample = apiDoc?.request?.sample || {}
+  const text = JSON.stringify(requestSample, null, 2)
   copyToClipboard(text)
 }
 
