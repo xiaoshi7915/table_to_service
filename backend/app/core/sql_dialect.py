@@ -75,6 +75,52 @@ class SQLDialectAdapter(ABC):
             标准化后的SQL语句
         """
         return sql
+    
+    def add_pagination(self, sql: str, page: int, page_size: int) -> str:
+        """
+        为SQL添加分页
+        
+        Args:
+            sql: 原始SQL语句
+            page: 页码（从1开始）
+            page_size: 每页大小
+            
+        Returns:
+            添加分页后的SQL
+        """
+        offset = (page - 1) * page_size
+        limit_clause = self.build_limit_clause(limit=page_size, offset=offset)
+        if limit_clause:
+            sql_upper = sql.upper()
+            # 检查是否已有分页
+            has_pagination = any(kw in sql_upper for kw in ["LIMIT", "OFFSET", "FETCH", "ROWNUM", "TOP "])
+            if not has_pagination:
+                return f"{sql} {limit_clause}"
+        return sql
+    
+    def get_count_sql(self, sql: str) -> str:
+        """
+        获取COUNT查询SQL（用于分页时计算总数）
+        
+        Args:
+            sql: 原始SQL语句
+            
+        Returns:
+            COUNT查询SQL
+        """
+        # 简单的实现：将SELECT ... FROM替换为SELECT COUNT(*) FROM
+        import re
+        # 移除ORDER BY子句（COUNT查询不需要）
+        sql_no_order = re.sub(r'\s+ORDER\s+BY\s+[^;]+', '', sql, flags=re.IGNORECASE)
+        # 提取FROM之后的部分
+        match = re.search(r'FROM\s+(.+?)(?:\s+WHERE|\s+GROUP\s+BY|\s+HAVING|$)', sql_no_order, re.IGNORECASE | re.DOTALL)
+        if match:
+            from_part = match.group(1).strip()
+            # 提取WHERE子句
+            where_match = re.search(r'WHERE\s+(.+?)(?:\s+GROUP\s+BY|\s+HAVING|$)', sql_no_order, re.IGNORECASE | re.DOTALL)
+            where_clause = f" WHERE {where_match.group(1).strip()}" if where_match else ""
+            return f"SELECT COUNT(*) as count FROM {from_part}{where_clause}"
+        return f"SELECT COUNT(*) as count FROM ({sql}) as subquery"
 
 
 class MySQLAdapter(SQLDialectAdapter):

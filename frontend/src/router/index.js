@@ -63,6 +63,31 @@ const routes = [
         path: 'knowledge-config',
         name: 'KnowledgeConfig',
         component: () => import('@/views/KnowledgeConfig.vue')
+      },
+      {
+        path: 'chat',
+        name: 'Chat',
+        component: () => import('@/views/Chat.vue')
+      },
+      {
+        path: 'chat-history',
+        name: 'ChatHistory',
+        component: () => import('@/views/ChatHistory.vue')
+      },
+      {
+        path: 'dashboard-list',
+        name: 'DashboardList',
+        component: () => import('@/views/DashboardList.vue')
+      },
+      {
+        path: 'dashboard-view/:id',
+        name: 'DashboardView',
+        component: () => import('@/views/DashboardView.vue')
+      },
+      {
+        path: 'dashboard-edit/:id?',
+        name: 'DashboardEdit',
+        component: () => import('@/views/DashboardEdit.vue')
       }
     ]
   }

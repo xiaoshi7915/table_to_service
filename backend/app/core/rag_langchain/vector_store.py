@@ -3,9 +3,28 @@
 使用LangChain的PGVector实现
 """
 from typing import List, Optional, Dict, Any
-from langchain.vectorstores import PGVector
-from langchain.schema import Document
-from langchain.embeddings.base import Embeddings
+try:
+    # LangChain 1.x
+    try:
+        from langchain_postgres import PGVector
+    except ImportError:
+        try:
+            from langchain_community.vectorstores import PGVector
+        except ImportError:
+            from langchain.vectorstores import PGVector
+except ImportError:
+    # LangChain 0.x (fallback)
+    from langchain.vectorstores import PGVector
+
+try:
+    # LangChain 1.x
+    from langchain_core.documents import Document
+    from langchain_core.embeddings import Embeddings
+except ImportError:
+    # LangChain 0.x (fallback)
+    from langchain.schema import Document
+    from langchain.embeddings.base import Embeddings
+
 from loguru import logger
 from app.core.config import settings
 
@@ -33,6 +52,7 @@ class PGVectorStore:
         
         try:
             # 创建PGVector实例
+            # LangChain 使用 embedding_function 参数
             self.vector_store = PGVector(
                 connection_string=connection_string,
                 embedding_function=embedding_service,

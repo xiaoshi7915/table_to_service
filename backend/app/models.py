@@ -273,6 +273,7 @@ class ChatSession(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, comment="用户ID")
     title = Column(String(200), nullable=False, comment="会话标题（可编辑）")
     data_source_id = Column(Integer, ForeignKey("database_configs.id", ondelete="SET NULL"), nullable=True, comment="关联的数据源ID")
+    selected_tables = Column(Text, nullable=True, comment="选择的表列表（JSON格式）")
     status = Column(String(20), default="active", comment="状态（active, archived）")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")

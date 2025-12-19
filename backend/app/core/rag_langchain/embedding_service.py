@@ -3,8 +3,14 @@
 使用 text2vec-base-chinese 模型
 """
 from typing import List
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.embeddings.base import Embeddings
+try:
+    # LangChain 1.x
+    from langchain_huggingface import HuggingFaceEmbeddings
+    from langchain_core.embeddings import Embeddings
+except ImportError:
+    # LangChain 0.x (fallback)
+    from langchain_huggingface import HuggingFaceEmbeddings
+    from langchain.embeddings.base import Embeddings
 from loguru import logger
 
 

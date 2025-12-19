@@ -17,7 +17,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 from app.core.config import settings
 from app.core.database import Base, local_engine, test_local_connection
 from app.api.v1 import api_router
-from app.api.v1 import auth, api_docs, interface_configs, interface_executor, database_configs, table_configs, interface_proxy, ai_models, terminologies, sql_examples, prompts, knowledge, chat, chat_schema
+from app.api.v1 import auth, api_docs, interface_configs, interface_executor, database_configs, table_configs, interface_proxy, ai_models, terminologies, sql_examples, prompts, knowledge, chat, chat_schema, chat_recommendations, chat_export, dashboards
 
 # 配置日志
 logger.remove()
@@ -116,6 +116,9 @@ app.include_router(prompts.router)  # 自定义提示词
 app.include_router(knowledge.router)  # 业务知识库
 app.include_router(chat.router)  # 对话API
 app.include_router(chat_schema.router)  # 对话Schema API
+app.include_router(chat_recommendations.router)  # 对话推荐API
+app.include_router(chat_export.router)  # 对话导出API
+app.include_router(dashboards.router)  # 仪表板API
 app.include_router(interface_proxy.router)  # 动态接口代理，必须最后注册
 
 logger.info("路由注册完成")

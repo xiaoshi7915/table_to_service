@@ -13,7 +13,7 @@ from app.models import User, DatabaseConfig
 from app.schemas import ResponseModel
 from app.core.rag_langchain.schema_service import SchemaService
 
-router = APIRouter(prefix="/chat", tags=["对话Schema"])
+router = APIRouter(prefix="/api/v1/chat", tags=["对话Schema"])
 
 
 @router.get("/datasources/{datasource_id}/tables", response_model=ResponseModel)
@@ -52,10 +52,7 @@ async def get_tables(
         return ResponseModel(
             success=True,
             message="获取成功",
-            data={
-                "tables": tables,
-                "total": len(tables)
-            }
+            data=tables  # 直接返回表列表数组，而不是包装在对象中
         )
         
     except HTTPException:

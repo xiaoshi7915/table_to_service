@@ -277,14 +277,15 @@ class RAGWorkflow:
                     try:
                         from langchain_core.retrievers import BaseRetriever
                     except ImportError:
-                        try:
-                            from langchain.retrievers import BaseRetriever
-                        except ImportError:
-                            from langchain.schema import BaseRetriever
+                        from langchain.schema import BaseRetriever
                     class ContextRetriever(BaseRetriever):
                         def __init__(self, docs):
                             self.docs = docs
                         def _get_relevant_documents(self, query):
+                            return self.docs
+                        def get_relevant_documents(self, query):
+                            return self.docs
+                        async def aget_relevant_documents(self, query):
                             return self.docs
                     
                     temp_retriever = ContextRetriever(state["merged_context"])
@@ -321,39 +322,40 @@ class RAGWorkflow:
             return state
         
         try:
-            from app.core.db_factory import DatabaseConnectionFactory
-            from sqlalchemy import text
+            # 使用SQL执行服务
+            from .sql_executor import SQLExecutor
             
-            engine = DatabaseConnectionFactory.create_engine(db_config)
-            with engine.connect() as conn:
-                result = conn.execute(text(sql))
-                rows = result.fetchall()
-                columns = result.keys()
+            executor = SQLExecutor(
+                db_config=db_config,
+                timeout=30,
+                max_rows=1000,
+                enable_cache=False
+            )
+            
+            result = executor.execute(sql)
+            
+            if result["success"]:
+                state["sql_execution_result"] = {
+                    "success": True,
+                    "data": result["data"],
+                    "row_count": result["row_count"],
+                    "total_rows": result.get("total_rows", result["row_count"]),
+                    "columns": result.get("columns", []),
+                    "execution_time": result.get("execution_time", 0)
+                }
+                state["execution_error"] = None
+                state["final_sql"] = sql
                 
-                # 转换为字典列表
-                data = []
-                for row in rows[:1000]:  # 限制1000条
-                    row_dict = {}
-                    for i, col in enumerate(columns):
-                        value = row[i]
-                        if hasattr(value, 'isoformat'):
-                            value = value.isoformat()
-                        elif value is not None:
-                            value = str(value)
-                        row_dict[col] = value
-                    data.append(row_dict)
-            
-            engine.dispose()
-            
-            state["sql_execution_result"] = {
-                "success": True,
-                "data": data,
-                "row_count": len(data)
-            }
-            state["execution_error"] = None
-            state["final_sql"] = sql
-            
-            logger.info(f"SQL执行成功，返回 {len(data)} 条数据")
+                logger.info(f"SQL执行成功，返回 {result['row_count']} 条数据，耗时 {result.get('execution_time', 0):.2f}秒")
+            else:
+                state["execution_error"] = result.get("error", "SQL执行失败")
+                state["sql_execution_result"] = {
+                    "success": False,
+                    "error": result.get("error", "SQL执行失败")
+                }
+                state["retry_count"] = state.get("retry_count", 0) + 1
+                
+                logger.warning(f"SQL执行失败: {result.get('error', '未知错误')}")
             
         except Exception as e:
             error_msg = str(e)
@@ -409,24 +411,29 @@ class RAGWorkflow:
         """生成图表配置"""
         data = state["sql_execution_result"].get("data", [])
         question = state["question"]
+        sql = state.get("final_sql", "")
         
         if not data:
             state["chart_config"] = None
             state["explanation"] = "查询成功，但未返回数据"
             return state
         
-        # 根据问题和数据特征生成图表配置
-        chart_config = self._recommend_chart(question, data)
+        # 使用图表服务生成配置
+        from .chart_service import ChartService
+        chart_service = ChartService()
+        chart_config = chart_service.generate_chart_config(question, data, sql)
         state["chart_config"] = chart_config
         
         # 生成解释说明
-        state["explanation"] = f"根据问题「{question}」成功生成并执行了SQL查询，返回 {len(data)} 条数据"
+        chart_type = chart_config.get("type", "table")
+        state["explanation"] = f"根据问题「{question}」成功生成并执行了SQL查询，返回 {len(data)} 条数据，已生成{chart_type}图表"
         
         state["final_result"] = {
             "sql": state["final_sql"],
             "data": data[:100],  # 只返回前100条
             "total_rows": len(data),
-            "chart_config": chart_config
+            "chart_config": chart_config,
+            "chart_type": chart_type
         }
         
         return state

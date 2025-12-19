@@ -3,6 +3,7 @@
 实现对话会话和消息管理
 """
 from typing import List, Optional, Dict, Any
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
@@ -17,7 +18,7 @@ from app.models import User, ChatSession, ChatMessage, DatabaseConfig, AIModelCo
 from app.schemas import ResponseModel
 from app.core.llm.factory import LLMFactory
 
-router = APIRouter(prefix="/chat", tags=["对话"])
+router = APIRouter(prefix="/api/v1/chat", tags=["对话"])
 
 
 # 请求模型
@@ -25,6 +26,7 @@ class CreateSessionRequest(BaseModel):
     """创建会话请求"""
     title: Optional[str] = None
     data_source_id: Optional[int] = None
+    selected_tables: Optional[List[str]] = None  # 用户选择的表列表
 
 
 class UpdateSessionRequest(BaseModel):
@@ -88,11 +90,17 @@ async def create_session(
             if not db_config:
                 raise HTTPException(status_code=404, detail="数据源不存在")
         
+        # 保存选择的表列表（JSON格式）
+        selected_tables_json = None
+        if request.selected_tables:
+            selected_tables_json = json.dumps(request.selected_tables, ensure_ascii=False)
+        
         # 创建会话
         session = ChatSession(
             user_id=current_user.id,
             title=request.title,
             data_source_id=data_source_id,
+            selected_tables=selected_tables_json,
             status="active"
         )
         db.add(session)
@@ -124,6 +132,9 @@ async def list_sessions(
     page_size: int = Query(20, ge=1, le=100),
     status: Optional[str] = Query(None),
     data_source_id: Optional[int] = Query(None),
+    keyword: Optional[str] = Query(None),  # 搜索关键词
+    start_date: Optional[str] = Query(None),  # 开始日期
+    end_date: Optional[str] = Query(None),  # 结束日期
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_local_db)
 ):
@@ -138,6 +149,27 @@ async def list_sessions(
         # 数据源筛选
         if data_source_id:
             query = query.filter(ChatSession.data_source_id == data_source_id)
+        
+        # 关键词搜索（标题）
+        if keyword:
+            query = query.filter(ChatSession.title.like(f"%{keyword}%"))
+        
+        # 日期范围筛选
+        if start_date:
+            from datetime import datetime
+            try:
+                start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                query = query.filter(ChatSession.created_at >= start_dt)
+            except:
+                pass
+        
+        if end_date:
+            from datetime import datetime
+            try:
+                end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                query = query.filter(ChatSession.created_at <= end_dt)
+            except:
+                pass
         
         # 总数
         total = query.count()
@@ -222,6 +254,14 @@ async def get_session(
             ChatMessage.session_id == session.id
         ).count()
         
+        # 解析selected_tables
+        selected_tables = None
+        if session.selected_tables:
+            try:
+                selected_tables = json.loads(session.selected_tables)
+            except:
+                pass
+        
         return ResponseModel(
             success=True,
             message="获取成功",
@@ -230,6 +270,7 @@ async def get_session(
                 "title": session.title,
                 "data_source_id": session.data_source_id,
                 "data_source_name": data_source_name,
+                "selected_tables": selected_tables,
                 "status": session.status,
                 "created_at": session.created_at.isoformat(),
                 "updated_at": session.updated_at.isoformat(),
@@ -315,6 +356,45 @@ async def delete_session(
         raise HTTPException(status_code=500, detail=f"删除会话失败: {str(e)}")
 
 
+@router.post("/sessions/batch-delete", response_model=ResponseModel)
+async def batch_delete_sessions(
+    session_ids: List[int] = Body(..., embed=True, alias="session_ids"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_local_db)
+):
+    """批量删除会话"""
+    try:
+        if not session_ids:
+            raise HTTPException(status_code=400, detail="请选择要删除的会话")
+        
+        # 验证所有权
+        sessions = db.query(ChatSession).filter(
+            ChatSession.id.in_(session_ids),
+            ChatSession.user_id == current_user.id
+        ).all()
+        
+        if len(sessions) != len(session_ids):
+            raise HTTPException(status_code=403, detail="部分会话不存在或无权限")
+        
+        # 批量删除
+        for session in sessions:
+            db.delete(session)
+        
+        db.commit()
+        
+        return ResponseModel(
+            success=True,
+            message=f"成功删除 {len(sessions)} 个会话"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"批量删除会话失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"批量删除会话失败: {str(e)}")
+
+
 @router.post("/sessions/{session_id}/messages", response_model=ResponseModel)
 async def send_message(
     session_id: int,
@@ -346,7 +426,15 @@ async def send_message(
         if not db_config:
             raise HTTPException(status_code=404, detail="数据源不存在")
         
-        # 3. 保存用户消息
+        # 3. 获取选择的表列表（优先使用请求中的，否则从会话中获取）
+        selected_tables = request.selected_tables
+        if not selected_tables and session.selected_tables:
+            try:
+                selected_tables = json.loads(session.selected_tables)
+            except:
+                selected_tables = None
+        
+        # 4. 保存用户消息
         user_message = ChatMessage(
             session_id=session_id,
             role="user",
@@ -355,7 +443,7 @@ async def send_message(
         db.add(user_message)
         db.commit()
         
-        # 4. 获取AI模型配置
+        # 5. 获取AI模型配置
         model_config = db.query(AIModelConfig).filter(
             AIModelConfig.is_default == True,
             AIModelConfig.is_active == True
@@ -364,14 +452,14 @@ async def send_message(
         if not model_config:
             raise HTTPException(status_code=400, detail="未配置默认AI模型")
         
-        # 5. 创建LLM客户端
+        # 6. 创建LLM客户端
         llm_client = LLMFactory.create_client(model_config)
         
-        # 6. 创建LangChain适配的LLM
+        # 7. 创建LangChain适配的LLM
         from app.core.rag_langchain.llm_adapter import LangChainLLMAdapter
         langchain_llm = LangChainLLMAdapter(llm_client)
         
-        # 7. 创建RAG服务（使用LangChain版本）
+        # 8. 创建RAG服务（使用LangChain版本）
         from app.core.rag_langchain.embedding_service import ChineseEmbeddingService
         from app.core.rag_langchain.vector_store import VectorStoreManager
         from app.core.rag_langchain.hybrid_retriever import HybridRetriever
@@ -382,10 +470,9 @@ async def send_message(
             try:
                 from langchain_core.retrievers import BaseRetriever
             except ImportError:
-                from langchain.retrievers import BaseRetriever
+                from langchain.schema import BaseRetriever
         except ImportError:
-            from langchain.schema import Document
-            from langchain.retrievers import BaseRetriever
+            from langchain.schema import Document, BaseRetriever
         
         # 初始化嵌入服务
         embedding_service = None
@@ -470,11 +557,19 @@ async def send_message(
         
         # 如果检索器创建失败，使用空检索器（降级方案）
         if not terminology_retriever:
-            from langchain.retrievers import BaseRetriever
+            try:
+                from langchain_core.retrievers import BaseRetriever
+            except ImportError:
+                from langchain.schema import BaseRetriever
+            
             class EmptyRetriever(BaseRetriever):
                 def _get_relevant_documents(self, query: str):
                     return []
                 async def _aget_relevant_documents(self, query: str):
+                    return []
+                def get_relevant_documents(self, query: str):
+                    return []
+                async def aget_relevant_documents(self, query: str):
                     return []
             
             terminology_retriever = EmptyRetriever()
@@ -490,11 +585,11 @@ async def send_message(
             max_retries=3
         )
         
-        # 9. 运行工作流
+        # 10. 运行工作流（传递选择的表列表）
         workflow_result = rag_workflow.run(
             question=request.question,
             db_config=db_config,
-            selected_tables=request.selected_tables
+            selected_tables=selected_tables  # 使用从会话或请求中获取的表列表
         )
         
         # 10. 提取结果

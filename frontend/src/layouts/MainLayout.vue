@@ -2,7 +2,7 @@
   <el-container class="layout-container">
     <el-aside width="250px" class="sidebar">
       <div class="logo">
-        <h2>表转服务</h2>
+        <h2>智能问数+表转服务</h2>
       </div>
       
       <el-menu
@@ -60,6 +60,18 @@
           <el-menu-item index="/knowledge-config">
             <el-icon><Reading /></el-icon>
             <span>业务知识库</span>
+          </el-menu-item>
+          <el-menu-item index="/chat">
+            <el-icon><ChatLineRound /></el-icon>
+            <span>智能对话</span>
+          </el-menu-item>
+          <el-menu-item index="/chat-history">
+            <el-icon><List /></el-icon>
+            <span>历史对话</span>
+          </el-menu-item>
+          <el-menu-item index="/dashboard-list">
+            <el-icon><DataBoard /></el-icon>
+            <span>仪表板</span>
           </el-menu-item>
         </el-sub-menu>
       </el-menu>

@@ -2,10 +2,32 @@
 混合检索器
 结合向量检索和关键词检索（BM25）
 """
-from typing import List, Dict, Any, Optional
-from langchain.retrievers import BM25Retriever, EnsembleRetriever
-from langchain.schema import Document
-from langchain.vectorstores import VectorStore
+from typing import List, Dict, Any, Optional, Protocol
+try:
+    # LangChain 1.x
+    from langchain_community.retrievers import BM25Retriever
+    from langchain_core.documents import Document
+    try:
+        from langchain_core.vectorstores import VectorStore
+    except ImportError:
+        try:
+            from langchain.vectorstores import VectorStore
+        except ImportError:
+            # 如果 VectorStore 不可用，定义一个 Protocol
+            class VectorStore(Protocol):
+                def as_retriever(self, **kwargs):
+                    ...
+except ImportError:
+    # LangChain 0.x (fallback)
+    from langchain.retrievers import BM25Retriever
+    from langchain.schema import Document
+    try:
+        from langchain.vectorstores import VectorStore
+    except ImportError:
+        class VectorStore(Protocol):
+            def as_retriever(self, **kwargs):
+                ...
+
 from loguru import logger
 
 
@@ -51,14 +73,8 @@ class HybridRetriever:
             logger.warning(f"初始化BM25检索器失败: {e}，将只使用向量检索")
             self.keyword_retriever = None
         
-        # 混合检索器
-        if self.keyword_retriever:
-            self.ensemble_retriever = EnsembleRetriever(
-                retrievers=[self.vector_retriever, self.keyword_retriever],
-                weights=[vector_weight, keyword_weight]
-            )
-        else:
-            self.ensemble_retriever = self.vector_retriever
+        # 标记是否使用混合检索
+        self.use_ensemble = self.keyword_retriever is not None
     
     def get_relevant_documents(self, query: str) -> List[Document]:
         """
@@ -71,10 +87,31 @@ class HybridRetriever:
             相关文档列表
         """
         try:
-            if isinstance(self.ensemble_retriever, EnsembleRetriever):
-                return self.ensemble_retriever.get_relevant_documents(query)
+            if self.use_ensemble and self.keyword_retriever:
+                # 手动实现混合检索
+                vector_docs = self.vector_retriever.get_relevant_documents(query)
+                keyword_docs = self.keyword_retriever.get_relevant_documents(query)
+                
+                # 合并结果（去重，按权重排序）
+                doc_dict = {}
+                for doc in vector_docs:
+                    doc_id = doc.page_content[:50]  # 使用内容前50字符作为ID
+                    doc_dict[doc_id] = (doc, self.vector_weight)
+                
+                for doc in keyword_docs:
+                    doc_id = doc.page_content[:50]
+                    if doc_id in doc_dict:
+                        # 如果已存在，增加权重
+                        _, weight = doc_dict[doc_id]
+                        doc_dict[doc_id] = (doc, weight + self.keyword_weight)
+                    else:
+                        doc_dict[doc_id] = (doc, self.keyword_weight)
+                
+                # 按权重排序并返回文档
+                sorted_docs = sorted(doc_dict.values(), key=lambda x: x[1], reverse=True)
+                return [doc for doc, _ in sorted_docs]
             else:
-                return self.ensemble_retriever.get_relevant_documents(query)
+                return self.vector_retriever.get_relevant_documents(query)
         except Exception as e:
             logger.error(f"混合检索失败: {e}", exc_info=True)
             # 降级到向量检索
@@ -91,12 +128,45 @@ class HybridRetriever:
             相关文档列表
         """
         try:
-            if hasattr(self.ensemble_retriever, 'aget_relevant_documents'):
-                return await self.ensemble_retriever.aget_relevant_documents(query)
+            if self.use_ensemble and self.keyword_retriever:
+                # 异步执行混合检索
+                import asyncio
+                vector_task = asyncio.create_task(
+                    self._async_get_docs(self.vector_retriever, query)
+                )
+                keyword_task = asyncio.create_task(
+                    self._async_get_docs(self.keyword_retriever, query)
+                )
+                vector_docs, keyword_docs = await asyncio.gather(vector_task, keyword_task)
+                
+                # 合并结果（与同步版本相同）
+                doc_dict = {}
+                for doc in vector_docs:
+                    doc_id = doc.page_content[:50]
+                    doc_dict[doc_id] = (doc, self.vector_weight)
+                
+                for doc in keyword_docs:
+                    doc_id = doc.page_content[:50]
+                    if doc_id in doc_dict:
+                        _, weight = doc_dict[doc_id]
+                        doc_dict[doc_id] = (doc, weight + self.keyword_weight)
+                    else:
+                        doc_dict[doc_id] = (doc, self.keyword_weight)
+                
+                sorted_docs = sorted(doc_dict.values(), key=lambda x: x[1], reverse=True)
+                return [doc for doc, _ in sorted_docs]
             else:
-                return self.get_relevant_documents(query)
+                if hasattr(self.vector_retriever, 'aget_relevant_documents'):
+                    return await self.vector_retriever.aget_relevant_documents(query)
+                else:
+                    return self.get_relevant_documents(query)
         except Exception as e:
             logger.error(f"异步混合检索失败: {e}", exc_info=True)
             return self.get_relevant_documents(query)
-
-
+    
+    async def _async_get_docs(self, retriever, query: str) -> List[Document]:
+        """辅助方法：异步获取文档"""
+        if hasattr(retriever, 'aget_relevant_documents'):
+            return await retriever.aget_relevant_documents(query)
+        else:
+            return retriever.get_relevant_documents(query)

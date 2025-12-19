@@ -1,0 +1,342 @@
+"""
+SQL执行服务
+复用interface_executor的逻辑，提供SQL执行、结果处理、性能优化、安全控制
+"""
+import time
+from typing import Dict, Any, List, Optional
+from sqlalchemy import text
+from sqlalchemy.orm import sessionmaker
+from loguru import logger
+
+from app.models import DatabaseConfig
+from app.core.db_factory import DatabaseConnectionFactory
+from app.core.sql_dialect import SQLDialectFactory
+
+
+class SQLExecutor:
+    """SQL执行服务"""
+    
+    def __init__(
+        self,
+        db_config: DatabaseConfig,
+        timeout: int = 30,
+        max_rows: int = 1000,
+        enable_cache: bool = False
+    ):
+        """
+        初始化SQL执行器
+        
+        Args:
+            db_config: 数据库配置
+            timeout: 查询超时时间（秒）
+            max_rows: 最大返回行数
+            enable_cache: 是否启用缓存
+        """
+        self.db_config = db_config
+        self.timeout = timeout
+        self.max_rows = max_rows
+        self.enable_cache = enable_cache
+        self.db_type = db_config.db_type or "mysql"
+    
+    def execute(
+        self,
+        sql: str,
+        params: Optional[Dict[str, Any]] = None,
+        user_id: Optional[int] = None,
+        client_ip: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        执行SQL查询
+        
+        Args:
+            sql: SQL语句
+            params: 参数化查询参数
+            user_id: 用户ID（用于审计）
+            client_ip: 客户端IP（用于审计）
+            
+        Returns:
+            执行结果字典
+        """
+        start_time = time.time()
+        
+        # 1. 安全验证
+        self._validate_sql_safety(sql)
+        
+        # 2. 权限验证
+        # TODO: 实现查询权限验证
+        
+        # 3. 执行SQL
+        try:
+            engine = DatabaseConnectionFactory.create_engine(self.db_config)
+            adapter = SQLDialectFactory.get_adapter(self.db_type)
+            
+            # 设置超时
+            if self.db_type == "mysql":
+                with engine.connect() as conn:
+                    conn.execute(text(f"SET SESSION max_execution_time = {self.timeout * 1000}"))
+            
+            SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+            db = SessionLocal()
+            
+            try:
+                # 参数化查询（防止SQL注入）
+                if params:
+                    # 使用参数化查询
+                    formatted_sql = self._parameterize_sql(sql, params, adapter)
+                else:
+                    formatted_sql = sql
+                
+                # 执行查询
+                result = db.execute(text(formatted_sql))
+                rows = result.fetchall()
+                columns = result.keys()
+                
+                # 4. 处理结果
+                processed_data = self._process_results(rows, columns)
+                
+                elapsed_time = time.time() - start_time
+                
+                # 5. 审计日志
+                self._log_query(sql, user_id, client_ip, elapsed_time, len(processed_data))
+                
+                return {
+                    "success": True,
+                    "data": processed_data,
+                    "row_count": len(processed_data),
+                    "total_rows": len(rows),  # 实际查询到的行数（可能超过max_rows）
+                    "columns": list(columns),
+                    "execution_time": elapsed_time
+                }
+                
+            finally:
+                db.close()
+                engine.dispose()
+                
+        except Exception as e:
+            elapsed_time = time.time() - start_time
+            error_msg = str(e)
+            
+            # 审计日志（错误）
+            self._log_query(sql, user_id, client_ip, elapsed_time, 0, error=error_msg)
+            
+            logger.error(f"SQL执行失败: {error_msg}", exc_info=True)
+            return {
+                "success": False,
+                "error": error_msg,
+                "data": [],
+                "row_count": 0,
+                "execution_time": elapsed_time
+            }
+    
+    def _validate_sql_safety(self, sql: str):
+        """
+        验证SQL安全性
+        
+        Args:
+            sql: SQL语句
+            
+        Raises:
+            ValueError: 如果SQL不安全
+        """
+        sql_upper = sql.upper().strip()
+        
+        # 只允许SELECT语句
+        if not sql_upper.startswith("SELECT"):
+            raise ValueError("只允许执行SELECT查询语句")
+        
+        # 禁止危险操作
+        dangerous_keywords = [
+            "DROP", "DELETE", "TRUNCATE", "ALTER", "CREATE",
+            "INSERT", "UPDATE", "REPLACE", "GRANT", "REVOKE",
+            "EXEC", "EXECUTE", "CALL", "PROCEDURE", "FUNCTION"
+        ]
+        
+        for keyword in dangerous_keywords:
+            if keyword in sql_upper:
+                raise ValueError(f"禁止执行包含 {keyword} 的SQL语句")
+        
+        # 检查SQL注入模式
+        sql_injection_patterns = [
+            r"';.*--",
+            r"';.*#",
+            r"UNION.*SELECT",
+            r"xp_cmdshell",
+            r"LOAD_FILE",
+            r"INTO.*OUTFILE"
+        ]
+        
+        import re
+        for pattern in sql_injection_patterns:
+            if re.search(pattern, sql_upper, re.IGNORECASE):
+                raise ValueError("检测到潜在的SQL注入攻击")
+    
+    def _parameterize_sql(self, sql: str, params: Dict[str, Any], adapter) -> str:
+        """
+        参数化SQL（防止SQL注入）
+        
+        Args:
+            sql: SQL语句
+            params: 参数字典
+            adapter: SQL方言适配器
+            
+        Returns:
+            参数化后的SQL
+        """
+        # 如果SQL已经包含参数占位符（:param_name），直接使用
+        if ':' in sql:
+            # SQLAlchemy的参数化查询
+            return sql
+        
+        # 否则，替换参数值（需要根据数据库类型转义）
+        formatted_sql = sql
+        for key, value in params.items():
+            # 转义特殊字符
+            if isinstance(value, str):
+                escaped_value = value.replace("'", "''")
+                formatted_sql = formatted_sql.replace(f":{key}", f"'{escaped_value}'")
+            elif value is None:
+                formatted_sql = formatted_sql.replace(f":{key}", "NULL")
+            else:
+                formatted_sql = formatted_sql.replace(f":{key}", str(value))
+        
+        return formatted_sql
+    
+    def _process_results(
+        self,
+        rows: List[Any],
+        columns: Any
+    ) -> List[Dict[str, Any]]:
+        """
+        处理查询结果
+        
+        Args:
+            rows: 查询结果行
+            columns: 列名
+            
+        Returns:
+            处理后的数据列表
+        """
+        data = []
+        
+        for row in rows[:self.max_rows]:  # 限制行数
+            row_dict = {}
+            for i, col in enumerate(columns):
+                value = row[i]
+                
+                # 数据类型转换
+                if value is None:
+                    row_dict[col] = None
+                elif hasattr(value, 'isoformat'):
+                    # 日期时间类型
+                    row_dict[col] = value.isoformat()
+                elif isinstance(value, (int, float)):
+                    # 数值类型
+                    row_dict[col] = value
+                elif isinstance(value, bytes):
+                    # 二进制类型
+                    try:
+                        row_dict[col] = value.decode('utf-8')
+                    except:
+                        row_dict[col] = str(value)
+                else:
+                    # 字符串类型
+                    row_dict[col] = str(value)
+            
+            data.append(row_dict)
+        
+        return data
+    
+    def _log_query(
+        self,
+        sql: str,
+        user_id: Optional[int],
+        client_ip: Optional[str],
+        execution_time: float,
+        row_count: int,
+        error: Optional[str] = None
+    ):
+        """
+        记录查询审计日志
+        
+        Args:
+            sql: SQL语句
+            user_id: 用户ID
+            client_ip: 客户端IP
+            execution_time: 执行时间
+            row_count: 返回行数
+            error: 错误信息（如果有）
+        """
+        log_data = {
+            "sql": sql[:200],  # 只记录前200字符
+            "user_id": user_id,
+            "client_ip": client_ip,
+            "execution_time": execution_time,
+            "row_count": row_count,
+            "success": error is None,
+            "error": error
+        }
+        
+        if error:
+            logger.warning(f"SQL查询审计: {log_data}")
+        else:
+            logger.info(f"SQL查询审计: {log_data}")
+        
+        # TODO: 可以保存到数据库的审计日志表
+    
+    def execute_with_pagination(
+        self,
+        sql: str,
+        page: int = 1,
+        page_size: int = 100,
+        params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        分页执行SQL查询
+        
+        Args:
+            sql: SQL语句
+            page: 页码（从1开始）
+            page_size: 每页大小
+            params: 参数
+            
+        Returns:
+            分页结果
+        """
+        try:
+            adapter = SQLDialectFactory.get_adapter(self.db_type)
+            
+            # 构建分页SQL
+            paginated_sql = adapter.add_pagination(sql, page, page_size)
+            
+            # 执行查询
+            result = self.execute(paginated_sql, params)
+            
+            if result["success"]:
+                # 计算总数（需要执行COUNT查询）
+                count_sql = adapter.get_count_sql(sql)
+                count_result = self.execute(count_sql, params)
+                
+                total = 0
+                if count_result.get("success") and count_result.get("data"):
+                    total = count_result["data"][0].get("count", 0) if count_result["data"] else 0
+                
+                return {
+                    **result,
+                    "pagination": {
+                        "page": page,
+                        "page_size": page_size,
+                        "total": total,
+                        "total_pages": (total + page_size - 1) // page_size if total > 0 else 0
+                    }
+                }
+            
+            return result
+        except Exception as e:
+            logger.error(f"分页查询失败: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "data": [],
+                "row_count": 0
+            }
+
