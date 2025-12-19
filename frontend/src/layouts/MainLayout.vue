@@ -63,7 +63,7 @@
           </el-menu-item>
           <el-menu-item index="/chat">
             <el-icon><ChatLineRound /></el-icon>
-            <span>智能对话</span>
+            <span>智能问数</span>
           </el-menu-item>
           <el-menu-item index="/chat-history">
             <el-icon><List /></el-icon>
@@ -151,7 +151,7 @@ const pageTitle = computed(() => {
     '/prompt-config': '自定义提示词',
     '/knowledge-config': '业务知识库'
   }
-  return titles[route.path] || '表转接口服务'
+  return titles[route.path] || '智能问数'
 })
 
 const handleCommand = (command) => {

@@ -1,62 +1,114 @@
 <template>
   <div class="dashboard">
-    <el-row :gutter="20">
-      <el-col :span="6">
-        <el-card class="stat-card">
-          <div class="stat-content">
-            <div class="stat-icon" style="background: #409eff;">
-              <el-icon><Grid /></el-icon>
+    <!-- 表转服务统计 -->
+    <div class="stats-section">
+      <h3 class="section-title">表转服务统计</h3>
+      <el-row :gutter="20">
+        <el-col :span="6">
+          <el-card class="stat-card">
+            <div class="stat-content">
+              <div class="stat-icon" style="background: #409eff;">
+                <el-icon><Grid /></el-icon>
+              </div>
+              <div class="stat-info">
+                <div class="stat-value">{{ stats.totalInterfaces }}</div>
+                <div class="stat-label">总接口数</div>
+              </div>
             </div>
-            <div class="stat-info">
-              <div class="stat-value">{{ stats.totalInterfaces }}</div>
-              <div class="stat-label">总接口数</div>
+          </el-card>
+        </el-col>
+        
+        <el-col :span="6">
+          <el-card class="stat-card">
+            <div class="stat-content">
+              <div class="stat-icon" style="background: #67c23a;">
+                <el-icon><CircleCheck /></el-icon>
+              </div>
+              <div class="stat-info">
+                <div class="stat-value">{{ stats.activeInterfaces }}</div>
+                <div class="stat-label">已激活接口</div>
+              </div>
             </div>
-          </div>
-        </el-card>
-      </el-col>
-      
-      <el-col :span="6">
-        <el-card class="stat-card">
-          <div class="stat-content">
-            <div class="stat-icon" style="background: #67c23a;">
-              <el-icon><CircleCheck /></el-icon>
+          </el-card>
+        </el-col>
+        
+        <el-col :span="6">
+          <el-card class="stat-card">
+            <div class="stat-content">
+              <div class="stat-icon" style="background: #e6a23c;">
+                <el-icon><Connection /></el-icon>
+              </div>
+              <div class="stat-info">
+                <div class="stat-value">{{ stats.databases }}</div>
+                <div class="stat-label">数据库连接</div>
+              </div>
             </div>
-            <div class="stat-info">
-              <div class="stat-value">{{ stats.activeInterfaces }}</div>
-              <div class="stat-label">已激活接口</div>
+          </el-card>
+        </el-col>
+        
+        <el-col :span="6">
+          <el-card class="stat-card">
+            <div class="stat-content">
+              <div class="stat-icon" style="background: #f56c6c;">
+                <el-icon><Document /></el-icon>
+              </div>
+              <div class="stat-info">
+                <div class="stat-value">{{ stats.apiEndpoints }}</div>
+                <div class="stat-label">API端点</div>
+              </div>
             </div>
-          </div>
-        </el-card>
-      </el-col>
-      
-      <el-col :span="6">
-        <el-card class="stat-card">
-          <div class="stat-content">
-            <div class="stat-icon" style="background: #e6a23c;">
-              <el-icon><Connection /></el-icon>
+          </el-card>
+        </el-col>
+      </el-row>
+    </div>
+    
+    <!-- 智能问数统计 -->
+    <div class="stats-section" style="margin-top: 30px;">
+      <h3 class="section-title">智能问数统计</h3>
+      <el-row :gutter="20">
+        <el-col :span="6">
+          <el-card class="stat-card">
+            <div class="stat-content">
+              <div class="stat-icon" style="background: #9c27b0;">
+                <el-icon><ChatLineRound /></el-icon>
+              </div>
+              <div class="stat-info">
+                <div class="stat-value">{{ stats.totalSessions }}</div>
+                <div class="stat-label">对话总数</div>
+              </div>
             </div>
-            <div class="stat-info">
-              <div class="stat-value">{{ stats.databases }}</div>
-              <div class="stat-label">数据库连接</div>
+          </el-card>
+        </el-col>
+        
+        <el-col :span="6">
+          <el-card class="stat-card">
+            <div class="stat-content">
+              <div class="stat-icon" style="background: #00bcd4;">
+                <el-icon><Message /></el-icon>
+              </div>
+              <div class="stat-info">
+                <div class="stat-value">{{ stats.totalMessages }}</div>
+                <div class="stat-label">消息总数</div>
+              </div>
             </div>
-          </div>
-        </el-card>
-      </el-col>
-      
-      <el-col :span="6">
-        <el-card class="stat-card">
-          <div class="stat-content">
-            <div class="stat-icon" style="background: #f56c6c;">
-              <el-icon><Document /></el-icon>
+          </el-card>
+        </el-col>
+        
+        <el-col :span="6">
+          <el-card class="stat-card">
+            <div class="stat-content">
+              <div class="stat-icon" style="background: #ff9800;">
+                <el-icon><DataBoard /></el-icon>
+              </div>
+              <div class="stat-info">
+                <div class="stat-value">{{ stats.totalDashboards }}</div>
+                <div class="stat-label">仪表板数</div>
+              </div>
             </div>
-            <div class="stat-info">
-              <div class="stat-value">{{ stats.apiEndpoints }}</div>
-              <div class="stat-label">API端点</div>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
+          </el-card>
+        </el-col>
+      </el-row>
+    </div>
     
     <el-row :gutter="20" style="margin-top: 20px;">
       <el-col :span="12">
@@ -94,21 +146,22 @@
       <el-col :span="12">
         <el-card>
           <template #header>
-            <span>系统状态</span>
+            <span>最近创建的对话</span>
           </template>
-          <div class="system-status">
-            <el-descriptions :column="1" border>
-              <el-descriptions-item label="数据库连接">
-                <el-tag type="success">正常</el-tag>
-              </el-descriptions-item>
-              <el-descriptions-item label="API服务">
-                <el-tag type="success">运行中</el-tag>
-              </el-descriptions-item>
-              <el-descriptions-item label="服务版本">
-                v1.0.0
-              </el-descriptions-item>
-            </el-descriptions>
-          </div>
+          <el-table :data="recentSessions" style="width: 100%" v-loading="loading">
+            <el-table-column prop="title" label="对话标题" min-width="150" show-overflow-tooltip />
+            <el-table-column prop="data_source_name" label="数据源" width="120" />
+            <el-table-column prop="message_count" label="消息数" width="80" align="center">
+              <template #default="{ row }">
+                <el-tag size="small">{{ row.message_count || 0 }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="created_at" label="创建时间" width="160">
+              <template #default="{ row }">
+                {{ row.created_at ? new Date(row.created_at).toLocaleString('zh-CN') : '-' }}
+              </template>
+            </el-table-column>
+          </el-table>
         </el-card>
       </el-col>
     </el-row>
@@ -119,15 +172,22 @@
 import { ref, onMounted } from 'vue'
 import api from '@/api'
 import { ElMessage } from 'element-plus'
+import { ChatLineRound, Message, DataBoard } from '@element-plus/icons-vue'
+import chatApi from '@/api/chat'
+import dashboardsApi from '@/api/dashboards'
 
 const stats = ref({
   totalInterfaces: 0,
   activeInterfaces: 0,
   databases: 0,
-  apiEndpoints: 0
+  apiEndpoints: 0,
+  totalSessions: 0,
+  totalMessages: 0,
+  totalDashboards: 0
 })
 
 const recentInterfaces = ref([])
+const recentSessions = ref([])
 const loading = ref(false)
 
 const getMethodType = (method) => {
@@ -190,6 +250,53 @@ const loadDashboardData = async () => {
       
       recentInterfaces.value = recent
     }
+    
+    // 获取智能问数统计数据
+    try {
+      const sessionsRes = await chatApi.getSessions({ page: 1, page_size: 1 })
+      if (sessionsRes.code === 200 || sessionsRes.success) {
+        if (sessionsRes.pagination) {
+          stats.value.totalSessions = sessionsRes.pagination.total || 0
+        } else {
+          stats.value.totalSessions = sessionsRes.data?.length || 0
+        }
+        
+        // 获取最近5个对话
+        const allSessionsRes = await chatApi.getSessions({ page: 1, page_size: 5 })
+        if (allSessionsRes.code === 200 || allSessionsRes.success) {
+          recentSessions.value = (allSessionsRes.data || []).slice(0, 5)
+        }
+        
+        // 统计消息总数（从所有会话的消息数累加）
+        if (sessionsRes.pagination && sessionsRes.pagination.total > 0) {
+          const allSessionsForCount = await chatApi.getSessions({ page: 1, page_size: sessionsRes.pagination.total })
+          if (allSessionsForCount.code === 200 || allSessionsForCount.success) {
+            const allSessions = allSessionsForCount.data || []
+            stats.value.totalMessages = allSessions.reduce((sum, session) => {
+              return sum + (session.message_count || 0)
+            }, 0)
+          }
+        }
+      }
+    } catch (error) {
+      console.error('加载智能问数统计数据失败:', error)
+    }
+    
+    // 获取仪表板统计数据
+    try {
+      const dashboardsRes = await dashboardsApi.getDashboards({ page: 1, page_size: 1 })
+      if (dashboardsRes.code === 200 || dashboardsRes.success) {
+        if (dashboardsRes.pagination) {
+          stats.value.totalDashboards = dashboardsRes.pagination.total || 0
+        } else if (Array.isArray(dashboardsRes.data)) {
+          stats.value.totalDashboards = dashboardsRes.data.length
+        } else if (dashboardsRes.data?.data) {
+          stats.value.totalDashboards = dashboardsRes.data.data.length
+        }
+      }
+    } catch (error) {
+      console.error('加载仪表板统计数据失败:', error)
+    }
   } catch (error) {
     console.error('加载仪表盘数据失败:', error)
     ElMessage.error('加载仪表盘数据失败: ' + (error.response?.data?.detail || error.message))
@@ -197,6 +304,9 @@ const loadDashboardData = async () => {
     stats.value.activeInterfaces = 0
     stats.value.databases = 0
     stats.value.apiEndpoints = 0
+    stats.value.totalSessions = 0
+    stats.value.totalMessages = 0
+    stats.value.totalDashboards = 0
   } finally {
     loading.value = false
   }

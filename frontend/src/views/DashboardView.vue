@@ -94,16 +94,64 @@ const loadDashboard = async () => {
     const dashboardId = parseInt(route.params.id)
     const response = await dashboardApi.getDashboard(dashboardId)
     
-    if (response.code === 200) {
-      dashboard.value = response.data
-      widgets.value = response.data.widgets || []
+    if (response.code === 200 || response.success) {
+      dashboard.value = response.data || {}
+      widgets.value = response.data?.widgets || []
+      
+      // 处理组件数据（解析config和tableData）
+      widgets.value = widgets.value.map(widget => {
+        if (widget.config) {
+          // 如果是字符串，解析为对象
+          if (typeof widget.config === 'string') {
+            try {
+              widget.config = JSON.parse(widget.config)
+            } catch (e) {
+              console.error('解析widget config失败:', e)
+              widget.config = {}
+            }
+          }
+          
+          // 如果是表格类型，提取数据
+          if (widget.widget_type === 'table' && widget.config.data) {
+            widget.tableData = Array.isArray(widget.config.data) ? widget.config.data : []
+            
+            // 处理列名：确保是数组
+            if (widget.config.columns) {
+              if (Array.isArray(widget.config.columns)) {
+                widget.tableColumns = widget.config.columns
+              } else if (typeof widget.config.columns === 'string') {
+                // 如果是字符串，尝试解析为数组，或使用单个元素数组
+                try {
+                  widget.tableColumns = JSON.parse(widget.config.columns)
+                  if (!Array.isArray(widget.tableColumns)) {
+                    widget.tableColumns = [widget.config.columns]
+                  }
+                } catch (e) {
+                  widget.tableColumns = [widget.config.columns]
+                }
+              } else {
+                widget.tableColumns = []
+              }
+            } else if (widget.tableData.length > 0 && typeof widget.tableData[0] === 'object') {
+              // 从数据第一行提取列名
+              widget.tableColumns = Object.keys(widget.tableData[0])
+            } else {
+              widget.tableColumns = []
+            }
+          }
+        }
+        return widget
+      })
       
       // 渲染图表
       await nextTick()
       renderCharts()
+    } else {
+      ElMessage.error(response.message || '加载仪表板失败')
     }
   } catch (error) {
-    ElMessage.error('加载仪表板失败')
+    console.error('加载仪表板失败:', error)
+    ElMessage.error('加载仪表板失败：' + (error.response?.data?.detail || error.message || '未知错误'))
   } finally {
     loading.value = false
   }
@@ -116,9 +164,30 @@ const renderCharts = () => {
       const chartId = `chart-${widget.id}`
       const chartDom = document.getElementById(chartId)
       if (chartDom) {
-        const chart = echarts.init(chartDom)
-        chart.setOption(widget.config)
-        chartRefs.value[widget.id] = chart
+        try {
+          // 确保config是对象
+          let chartConfig = widget.config
+          if (typeof chartConfig === 'string') {
+            try {
+              chartConfig = JSON.parse(chartConfig)
+            } catch (e) {
+              console.error('解析图表配置失败:', e)
+              return
+            }
+          }
+          
+          // 验证配置对象
+          if (typeof chartConfig !== 'object' || chartConfig === null) {
+            console.error('图表配置格式错误:', chartConfig)
+            return
+          }
+          
+          const chart = echarts.init(chartDom)
+          chart.setOption(chartConfig)
+          chartRefs.value[widget.id] = chart
+        } catch (error) {
+          console.error(`渲染图表失败 (widget ${widget.id}):`, error)
+        }
       }
     }
   })

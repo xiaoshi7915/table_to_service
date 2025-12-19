@@ -39,6 +39,7 @@ class SendMessageRequest(BaseModel):
     question: str
     data_source_id: Optional[int] = None
     selected_tables: Optional[List[str]] = None  # 用户选择的表列表
+    edited_sql: Optional[str] = None  # 用户编辑后的SQL（用于重试）
 
 
 # 响应模型
@@ -597,10 +598,73 @@ async def send_message(
         data = workflow_result.get("data", [])
         chart_config = workflow_result.get("chart_config")
         error = workflow_result.get("error")
+        execution_error = workflow_result.get("execution_error")
         
-        if error:
-            logger.error(f"工作流执行失败: {error}")
-            raise HTTPException(status_code=500, detail=f"SQL生成失败: {error}")
+        # 如果用户提供了编辑后的SQL，直接执行它
+        if request.edited_sql:
+            final_sql = request.edited_sql
+            try:
+                from app.core.rag_langchain.sql_executor import SQLExecutor
+                executor = SQLExecutor(
+                    db_config=db_config,
+                    timeout=30,
+                    max_rows=1000,
+                    enable_cache=False
+                )
+                result = executor.execute(final_sql, user_id=current_user.id)
+                
+                if result["success"]:
+                    data = result["data"]
+                    # 重新生成图表配置
+                    from app.core.rag_langchain.chart_service import ChartService
+                    chart_service = ChartService()
+                    chart_config = chart_service.generate_chart_config(
+                        question=request.question,
+                        sql=final_sql,
+                        data=data,
+                        columns=result.get("columns", [])
+                    )
+                    error = None
+                    execution_error = None
+                else:
+                    error = result.get("error", "SQL执行失败")
+                    execution_error = error
+                    data = []
+            except Exception as e:
+                logger.error(f"执行用户编辑的SQL失败: {e}", exc_info=True)
+                error = str(e)
+                execution_error = error
+                data = []
+        
+        # 如果有错误，返回错误信息但包含SQL，允许用户编辑重试
+        if error or execution_error:
+            # 保存错误消息
+            assistant_message = ChatMessage(
+                session_id=session_id,
+                role="assistant",
+                content=f"执行失败：{execution_error or error}",
+                sql_statement=final_sql if final_sql else "",
+                error_message=execution_error or error,
+                tokens_used=0
+            )
+            db.add(assistant_message)
+            session.updated_at = datetime.now()
+            db.commit()
+            db.refresh(assistant_message)
+            
+            return ResponseModel(
+                success=False,
+                message="SQL执行失败",
+                data={
+                    "id": assistant_message.id,
+                    "sql": final_sql,
+                    "error": execution_error or error,
+                    "error_message": execution_error or error,
+                    "can_retry": True,  # 允许重试
+                    "data": [],
+                    "data_total": 0
+                }
+            )
         
         # 11. 保存AI回复
         assistant_message = ChatMessage(

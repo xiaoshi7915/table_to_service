@@ -43,6 +43,28 @@
       </div>
       
       <div v-else class="chat-messages">
+        <!-- 数据源和表信息提示 -->
+        <div v-if="currentSession" class="session-info-bar">
+          <div class="info-item">
+            <el-icon><Connection /></el-icon>
+            <span class="info-label">数据源：</span>
+            <el-tag type="primary" size="small">{{ currentSession.data_source_name || '未选择' }}</el-tag>
+          </div>
+          <div class="info-item" v-if="currentSession.selected_tables">
+            <el-icon><Grid /></el-icon>
+            <span class="info-label">已选表：</span>
+            <el-tag
+              v-for="(table, idx) in (typeof currentSession.selected_tables === 'string' ? JSON.parse(currentSession.selected_tables) : currentSession.selected_tables)"
+              :key="idx"
+              type="success"
+              size="small"
+              style="margin-right: 4px"
+            >
+              {{ table }}
+            </el-tag>
+          </div>
+        </div>
+        
         <div
           v-for="message in messages"
           :key="message.id"
@@ -59,31 +81,65 @@
               <div v-if="message.sql" class="sql-section">
                 <div class="section-header">
                   <span>生成的SQL</span>
-                  <el-button size="small" text @click="copySQL(message.sql)">
-                    <el-icon><DocumentCopy /></el-icon>
-                    复制
-                  </el-button>
+                  <div class="sql-actions">
+                    <el-button size="small" text @click="copySQL(message.sql)">
+                      <el-icon><DocumentCopy /></el-icon>
+                      复制
+                    </el-button>
+                    <el-button 
+                      v-if="message.error || message.error_message" 
+                      size="small" 
+                      type="warning" 
+                      @click="showEditSQLDialog(message)"
+                    >
+                      <el-icon><Edit /></el-icon>
+                      编辑SQL
+                    </el-button>
+                  </div>
                 </div>
                 <pre class="sql-code">{{ message.sql }}</pre>
+                <!-- 错误信息 -->
+                <div v-if="message.error || message.error_message" class="error-message">
+                  <el-alert
+                    :title="message.error || message.error_message"
+                    type="error"
+                    :closable="false"
+                    show-icon
+                  >
+                    <template #default>
+                      <div style="margin-top: 8px">
+                        <el-button size="small" type="primary" @click="showEditSQLDialog(message)">
+                          编辑SQL并重试
+                        </el-button>
+                      </div>
+                    </template>
+                  </el-alert>
+                </div>
               </div>
               
               <!-- 图表展示 -->
               <div v-if="message.chart_config" class="chart-section">
                 <div class="section-header">
                   <span>数据可视化</span>
-                  <el-select
-                    v-model="message.chart_type"
-                    size="small"
-                    style="width: 120px"
-                    @change="changeChartType(message)"
-                  >
-                    <el-option label="表格" value="table" />
-                    <el-option label="柱状图" value="bar" />
-                    <el-option label="折线图" value="line" />
-                    <el-option label="饼图" value="pie" />
-                    <el-option label="散点图" value="scatter" />
-                    <el-option label="面积图" value="area" />
-                  </el-select>
+                  <div class="chart-actions">
+                    <el-select
+                      v-model="message.chart_type"
+                      size="small"
+                      style="width: 120px; margin-right: 8px"
+                      @change="changeChartType(message)"
+                    >
+                      <el-option label="表格" value="table" />
+                      <el-option label="柱状图" value="bar" />
+                      <el-option label="折线图" value="line" />
+                      <el-option label="饼图" value="pie" />
+                      <el-option label="散点图" value="scatter" />
+                      <el-option label="面积图" value="area" />
+                    </el-select>
+                    <el-button size="small" type="primary" @click="showAddToDashboardDialog(message)">
+                      <el-icon><DataBoard /></el-icon>
+                      添加到仪表板
+                    </el-button>
+                  </div>
                 </div>
                 <div
                   v-if="message.chart_type !== 'table'"
@@ -189,48 +245,70 @@
     <el-dialog
       v-model="createSessionDialogVisible"
       title="创建新对话"
-      width="600px"
+      width="700px"
       @close="resetCreateSessionForm"
     >
-      <el-form :model="createSessionForm" label-width="100px">
-        <el-form-item label="对话标题">
-          <el-input v-model="createSessionForm.title" placeholder="请输入对话标题（可选）" />
-        </el-form-item>
-        <el-form-item label="数据源" required>
-          <el-select
-            v-model="createSessionForm.data_source_id"
-            placeholder="请选择数据源"
-            style="width: 100%"
-            @change="handleDataSourceChange"
-          >
-            <el-option
-              v-for="ds in dataSources"
-              :key="ds.id"
-              :label="ds.name"
-              :value="ds.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="选择表" required>
-          <el-select
-            v-model="createSessionForm.selected_tables"
-            placeholder="请选择表（可多选）"
-            multiple
-            style="width: 100%"
-            :disabled="!createSessionForm.data_source_id || loadingTables"
-          >
-            <el-option
-              v-for="table in tables"
-              :key="table.name"
-              :label="table.name"
-              :value="table.name"
-            />
-          </el-select>
-          <div v-if="loadingTables" style="margin-top: 8px; color: #909399; font-size: 12px">
-            正在加载表列表...
-          </div>
-        </el-form-item>
-      </el-form>
+      <div class="create-session-content">
+        <!-- 提示信息 -->
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 20px"
+        >
+          <template #default>
+            <div class="alert-content">
+              <p style="margin: 0 0 8px 0; font-weight: 500;">开启智能问数前，请先选择数据源和表</p>
+              <p style="margin: 0; font-size: 12px; color: #909399;">
+                我可以查询数据、生成图表、分析数据、预测数据等，请选择一个数据源，开启智能问数吧~
+              </p>
+            </div>
+          </template>
+        </el-alert>
+        
+        <el-form :model="createSessionForm" label-width="100px">
+          <el-form-item label="对话标题">
+            <el-input v-model="createSessionForm.title" placeholder="请输入对话标题（可选）" />
+          </el-form-item>
+          <el-form-item label="数据源" required>
+            <el-select
+              v-model="createSessionForm.data_source_id"
+              placeholder="请选择数据源"
+              style="width: 100%"
+              @change="handleDataSourceChange"
+            >
+              <el-option
+                v-for="ds in dataSources"
+                :key="ds.id"
+                :label="ds.name"
+                :value="ds.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="选择表" required>
+            <el-select
+              v-model="createSessionForm.selected_tables"
+              placeholder="请选择表（可多选）"
+              multiple
+              style="width: 100%"
+              :disabled="!createSessionForm.data_source_id || loadingTables"
+            >
+              <el-option
+                v-for="table in tables"
+                :key="table.name"
+                :label="table.name"
+                :value="table.name"
+              />
+            </el-select>
+            <div v-if="loadingTables" style="margin-top: 8px; color: #909399; font-size: 12px">
+              正在加载表列表...
+            </div>
+            <div v-if="!loadingTables && createSessionForm.data_source_id && tables.length === 0" style="margin-top: 8px; color: #f56c6c; font-size: 12px">
+              该数据源暂无可用表
+            </div>
+          </el-form-item>
+        </el-form>
+      </div>
       <template #footer>
         <el-button @click="createSessionDialogVisible = false">取消</el-button>
         <el-button
@@ -238,7 +316,46 @@
           @click="confirmCreateSession"
           :disabled="!createSessionForm.data_source_id || !createSessionForm.selected_tables || createSessionForm.selected_tables.length === 0"
         >
-          创建
+          开启问数
+        </el-button>
+      </template>
+    </el-dialog>
+    
+    <!-- 添加到仪表板对话框 -->
+    <el-dialog
+      v-model="addToDashboardDialogVisible"
+      title="添加到仪表板"
+      width="500px"
+      @close="resetAddToDashboardForm"
+    >
+      <el-form :model="addToDashboardForm" label-width="100px">
+        <el-form-item label="选择仪表板" required>
+          <el-select
+            v-model="addToDashboardForm.dashboard_id"
+            placeholder="请选择仪表板"
+            style="width: 100%"
+            filterable
+          >
+            <el-option
+              v-for="dashboard in dashboardList"
+              :key="dashboard.id"
+              :label="dashboard.name"
+              :value="dashboard.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="组件标题">
+          <el-input v-model="addToDashboardForm.title" placeholder="请输入组件标题" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="addToDashboardDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          @click="confirmAddToDashboard"
+          :disabled="!addToDashboardForm.dashboard_id"
+        >
+          添加
         </el-button>
       </template>
     </el-dialog>
@@ -249,9 +366,10 @@
 import { ref, onMounted, nextTick, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as echarts from 'echarts'
-import { Plus, Delete, DocumentCopy, Download, Loading } from '@element-plus/icons-vue'
+import { Plus, Delete, DocumentCopy, Download, Loading, DataBoard } from '@element-plus/icons-vue'
 import chatApi from '@/api/chat'
 import request from '@/utils/request'
+import dashboardsApi from '@/api/dashboards'
 
 const sessions = ref([])
 const currentSessionId = ref(null)
@@ -272,6 +390,25 @@ const createSessionForm = ref({
 const dataSources = ref([])
 const tables = ref([])
 const loadingTables = ref(false)
+
+// 添加到仪表板相关
+const addToDashboardDialogVisible = ref(false)
+const dashboardList = ref([])
+const addToDashboardForm = ref({
+  dashboard_id: null,
+  title: ''
+})
+const currentMessageForDashboard = ref(null)
+
+// 编辑SQL相关
+const editSQLDialogVisible = ref(false)
+const editSQLForm = ref({
+  originalQuestion: '',
+  sql: '',
+  error: '',
+  messageId: null
+})
+const retryingSQL = ref(false)
 
 // 加载对话列表
 const loadSessions = async () => {
@@ -501,7 +638,7 @@ const sendMessage = async () => {
       selected_tables: selectedTables
     })
     
-    if (response.code === 200) {
+    if (response.code === 200 || response.success) {
       await loadMessages(currentSessionId.value)
       await loadRecommendedQuestions()
       
@@ -512,7 +649,12 @@ const sendMessage = async () => {
         messagesContainer.scrollTop = messagesContainer.scrollHeight
       }
     } else {
-      ElMessage.error(response.message || '发送失败')
+      // 如果失败但有SQL，允许用户编辑重试
+      if (response.data?.sql && response.data?.can_retry) {
+        ElMessage.warning('SQL执行失败，您可以编辑SQL后重试')
+      } else {
+        ElMessage.error(response.message || '发送失败')
+      }
     }
   } catch (error) {
     ElMessage.error('发送消息失败：' + (error.message || '未知错误'))
@@ -739,6 +881,167 @@ const handleCtrlEnter = () => {
   // Ctrl+Enter换行，不需要特殊处理
 }
 
+// 显示添加到仪表板对话框
+const showAddToDashboardDialog = async (message) => {
+  currentMessageForDashboard.value = message
+  addToDashboardForm.value.title = message.chart_config?.title || `图表 ${new Date().toLocaleString('zh-CN')}`
+  
+  // 加载仪表板列表
+  try {
+    const response = await dashboardsApi.getDashboards({ page: 1, page_size: 100 })
+    if (response.code === 200 || response.success) {
+      dashboardList.value = response.data?.data || response.data || []
+    }
+  } catch (error) {
+    ElMessage.error('加载仪表板列表失败')
+    console.error('加载仪表板列表失败:', error)
+  }
+  
+  addToDashboardDialogVisible.value = true
+}
+
+// 重置添加到仪表板表单
+const resetAddToDashboardForm = () => {
+  addToDashboardForm.value = {
+    dashboard_id: null,
+    title: ''
+  }
+  currentMessageForDashboard.value = null
+}
+
+// 确认添加到仪表板
+const confirmAddToDashboard = async () => {
+  if (!currentMessageForDashboard.value) {
+    ElMessage.error('消息不存在')
+    return
+  }
+  
+  if (!addToDashboardForm.value.dashboard_id) {
+    ElMessage.warning('请选择仪表板')
+    return
+  }
+  
+  try {
+    const message = currentMessageForDashboard.value
+    const chartConfig = message.chart_config || {}
+    
+    const widgetData = {
+      widget_type: message.chart_type === 'table' ? 'table' : 'chart',
+      title: addToDashboardForm.value.title || chartConfig.title || '图表',
+      config: {
+        ...chartConfig,
+        type: message.chart_type,
+        data: message.data,
+        columns: message.columns
+      },
+      message_id: message.id,
+      position_x: 0,
+      position_y: 0,
+      width: 400,
+      height: 300
+    }
+    
+    const response = await dashboardsApi.createWidget(addToDashboardForm.value.dashboard_id, widgetData)
+    if (response.code === 200 || response.success) {
+      ElMessage.success('已添加到仪表板')
+      addToDashboardDialogVisible.value = false
+      resetAddToDashboardForm()
+    } else {
+      ElMessage.error(response.message || '添加失败')
+    }
+  } catch (error) {
+    ElMessage.error('添加到仪表板失败：' + (error.message || '未知错误'))
+    console.error('添加到仪表板失败:', error)
+  }
+}
+
+// 显示编辑SQL对话框
+const showEditSQLDialog = (message) => {
+  // 找到原始问题（从用户消息中）
+  const userMessage = messages.value.find(m => 
+    m.role === 'user' && 
+    messages.value.indexOf(m) < messages.value.indexOf(message)
+  )
+  
+  editSQLForm.value = {
+    originalQuestion: userMessage?.content || message.question || '',
+    sql: message.sql || '',
+    error: message.error || message.error_message || '',
+    messageId: message.id
+  }
+  editSQLDialogVisible.value = true
+}
+
+// 重置编辑SQL表单
+const resetEditSQLForm = () => {
+  editSQLForm.value = {
+    originalQuestion: '',
+    sql: '',
+    error: '',
+    messageId: null
+  }
+}
+
+// 确认重试SQL
+const confirmRetrySQL = async () => {
+  if (!editSQLForm.value.sql.trim()) {
+    ElMessage.warning('请输入SQL语句')
+    return
+  }
+  
+  if (!currentSessionId.value) {
+    ElMessage.warning('请先选择或创建一个对话')
+    return
+  }
+  
+  retryingSQL.value = true
+  try {
+    // 获取当前会话信息
+    const dataSourceId = currentSession.value?.data_source_id 
+      || sessions.value.find(s => s.id === currentSessionId.value)?.data_source_id
+    
+    if (!dataSourceId) {
+      ElMessage.error('会话未关联数据源')
+      retryingSQL.value = false
+      return
+    }
+    
+    // 发送编辑后的SQL
+    const response = await chatApi.sendMessage(currentSessionId.value, {
+      question: editSQLForm.value.originalQuestion,
+      data_source_id: dataSourceId,
+      selected_tables: currentSession.value?.selected_tables 
+        ? (typeof currentSession.value.selected_tables === 'string' 
+          ? JSON.parse(currentSession.value.selected_tables) 
+          : currentSession.value.selected_tables)
+        : null,
+      edited_sql: editSQLForm.value.sql
+    })
+    
+    if (response.code === 200 || response.success) {
+      ElMessage.success('SQL执行成功')
+      editSQLDialogVisible.value = false
+      resetEditSQLForm()
+      // 重新加载消息
+      await loadMessages(currentSessionId.value)
+    } else {
+      ElMessage.error(response.message || 'SQL执行失败')
+      // 如果失败，更新错误信息
+      if (response.data?.error) {
+        editSQLForm.value.error = response.data.error
+      }
+    }
+  } catch (error) {
+    console.error('重试SQL失败:', error)
+    ElMessage.error('重试SQL失败：' + (error.response?.data?.detail || error.message || '未知错误'))
+    if (error.response?.data?.error) {
+      editSQLForm.value.error = error.response.data.error
+    }
+  } finally {
+    retryingSQL.value = false
+  }
+}
+
 onMounted(async () => {
   await loadSessions()
   // 等待会话加载完成后再加载推荐问题
@@ -751,7 +1054,7 @@ onMounted(async () => {
 .chat-container {
   display: flex;
   height: calc(100vh - 60px);
-  background: #f5f7fa;
+  background: linear-gradient(135deg, #f5f7fa 0%, #e8ecf1 100%);
 }
 
 .chat-sidebar {
@@ -839,6 +1142,41 @@ onMounted(async () => {
   scroll-behavior: smooth;
 }
 
+.session-info-bar {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.info-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.info-item .el-icon {
+  font-size: 16px;
+}
+
+.info-label {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.create-session-content {
+  padding: 10px 0;
+}
+
+.alert-content {
+  line-height: 1.6;
+}
+
 .message-item {
   margin-bottom: 20px;
 }
@@ -883,6 +1221,12 @@ onMounted(async () => {
   font-weight: 600;
 }
 
+.chart-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .sql-code {
   background: #282c34;
   color: #abb2bf;
@@ -891,6 +1235,16 @@ onMounted(async () => {
   overflow-x: auto;
   font-family: 'Courier New', monospace;
   font-size: 14px;
+}
+
+.sql-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.error-message {
+  margin-top: 12px;
 }
 
 .chart-container {

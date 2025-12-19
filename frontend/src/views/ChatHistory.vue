@@ -382,13 +382,19 @@ onMounted(() => {
 <style scoped>
 .chat-history-container {
   padding: 20px;
-  background: #f5f7fa;
+  background: linear-gradient(135deg, #f5f7fa 0%, #e8ecf1 100%);
   min-height: calc(100vh - 100px);
 }
 
 .main-card {
   background: white;
-  border-radius: 8px;
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  transition: box-shadow 0.3s;
+}
+
+.main-card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
 }
 
 .card-header {

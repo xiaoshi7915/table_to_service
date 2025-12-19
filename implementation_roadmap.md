@@ -422,7 +422,7 @@
   - [x] 仪表板列表页面（DashboardList.vue）
   - [x] 仪表板编辑页面（DashboardEdit.vue，基础版本）
   - [x] 仪表板预览页面（DashboardView.vue）
-  - [ ] 从对话添加图表到仪表板功能（待开发）
+  - [x] 从对话添加图表到仪表板功能（✅ 已完成）
   - [ ] 拖拽布局功能（待优化）
 
 **交付物**：✅ 仪表板API代码（dashboards.py），✅ 前端页面（基础版本完成）
