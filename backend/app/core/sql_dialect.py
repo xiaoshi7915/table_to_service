@@ -355,3 +355,4 @@ class SQLDialectFactory:
         """
         cls._adapters[db_type.lower()] = adapter
 
+

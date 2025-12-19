@@ -122,3 +122,4 @@ def is_encrypted(password: str) -> bool:
         # 解密失败，说明可能是明文
         return False
 
+

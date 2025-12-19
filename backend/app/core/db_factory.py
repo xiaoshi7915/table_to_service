@@ -243,3 +243,4 @@ class DatabaseConnectionFactory:
         type_info = cls.SUPPORTED_TYPES.get(db_type)
         return type_info["default_port"] if type_info else None
 
+
