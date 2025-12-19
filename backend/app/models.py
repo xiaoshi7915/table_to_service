@@ -21,6 +21,9 @@ class User(Base):
     # 关系
     database_configs = relationship("DatabaseConfig", back_populates="user", cascade="all, delete-orphan")
     interface_configs = relationship("InterfaceConfig", back_populates="user", cascade="all, delete-orphan")
+    # 智能问数相关关系
+    chat_sessions = relationship("ChatSession", foreign_keys="ChatSession.user_id", cascade="all, delete-orphan")
+    dashboards = relationship("Dashboard", foreign_keys="Dashboard.user_id", cascade="all, delete-orphan")
 
 
 class DatabaseConfig(Base):
@@ -156,4 +159,185 @@ class InterfaceHeader(Base):
     
     # 关系
     interface_config = relationship("InterfaceConfig", back_populates="headers")
+
+
+# ==================== 智能问数功能相关模型 ====================
+
+class AIModelConfig(Base):
+    """AI模型配置模型"""
+    __tablename__ = "ai_model_configs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False, comment="模型名称（如：deepseek-chat, qwen-turbo）")
+    provider = Column(String(50), nullable=False, comment="提供商（deepseek, qwen, kimi, openai等）")
+    api_key = Column(Text, nullable=False, comment="API密钥（加密存储）")
+    api_base_url = Column(String(500), nullable=True, comment="API基础URL")
+    model_name = Column(String(100), nullable=False, comment="具体模型名称")
+    max_tokens = Column(Integer, default=2000, comment="最大token数")
+    temperature = Column(String(10), default="0.7", comment="温度参数")
+    is_default = Column(Boolean, default=False, comment="是否默认模型")
+    is_active = Column(Boolean, default=True, comment="是否启用")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
+    
+    # 索引
+    __table_args__ = (
+        {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'},
+    )
+
+
+class Terminology(Base):
+    """术语库模型"""
+    __tablename__ = "terminologies"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    business_term = Column(String(200), nullable=False, comment="业务术语（如：销售量）")
+    db_field = Column(String(200), nullable=False, comment="数据库字段（如：sales_amount）")
+    table_name = Column(String(200), nullable=True, comment="所属表名")
+    description = Column(Text, nullable=True, comment="术语说明")
+    category = Column(String(100), nullable=True, comment="分类")
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, comment="创建人ID")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
+    
+    # 关系
+    creator = relationship("User", foreign_keys=[created_by])
+    
+    # 唯一约束：业务术语+数据库字段+表名组合唯一
+    __table_args__ = (
+        {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'},
+    )
+
+
+class SQLExample(Base):
+    """SQL示例库模型"""
+    __tablename__ = "sql_examples"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(200), nullable=False, comment="示例标题")
+    question = Column(Text, nullable=False, comment="对应的问题（自然语言）")
+    sql_statement = Column(Text, nullable=False, comment="SQL语句")
+    db_type = Column(String(50), nullable=False, comment="数据库类型")
+    table_name = Column(String(200), nullable=True, comment="涉及的表名")
+    description = Column(Text, nullable=True, comment="示例说明")
+    chart_type = Column(String(50), nullable=True, comment="推荐图表类型")
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, comment="创建人ID")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
+    
+    # 关系
+    creator = relationship("User", foreign_keys=[created_by])
+
+
+class CustomPrompt(Base):
+    """自定义提示词模型"""
+    __tablename__ = "custom_prompts"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False, comment="提示词名称")
+    prompt_type = Column(String(50), nullable=False, comment="类型（sql_generation, data_analysis等）")
+    content = Column(Text, nullable=False, comment="提示词内容")
+    priority = Column(Integer, default=0, comment="优先级（数字越大优先级越高）")
+    is_active = Column(Boolean, default=True, comment="是否启用")
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, comment="创建人ID")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
+    
+    # 关系
+    creator = relationship("User", foreign_keys=[created_by])
+
+
+class BusinessKnowledge(Base):
+    """业务知识库模型"""
+    __tablename__ = "business_knowledge"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(200), nullable=False, comment="知识标题")
+    content = Column(Text, nullable=False, comment="知识内容")
+    category = Column(String(100), nullable=True, comment="分类")
+    tags = Column(String(500), nullable=True, comment="标签（逗号分隔）")
+    embedding = Column(Text, nullable=True, comment="向量嵌入（JSON格式，可选）")
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, comment="创建人ID")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
+    
+    # 关系
+    creator = relationship("User", foreign_keys=[created_by])
+
+
+class ChatSession(Base):
+    """对话会话模型"""
+    __tablename__ = "chat_sessions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, comment="用户ID")
+    title = Column(String(200), nullable=False, comment="会话标题（可编辑）")
+    data_source_id = Column(Integer, ForeignKey("database_configs.id", ondelete="SET NULL"), nullable=True, comment="关联的数据源ID")
+    status = Column(String(20), default="active", comment="状态（active, archived）")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
+    
+    # 关系
+    user = relationship("User", foreign_keys=[user_id], overlaps="chat_sessions")
+    data_source = relationship("DatabaseConfig", foreign_keys=[data_source_id])
+    messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan", order_by="ChatMessage.created_at")
+
+
+class ChatMessage(Base):
+    """对话消息模型"""
+    __tablename__ = "chat_messages"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, comment="会话ID")
+    role = Column(String(20), nullable=False, comment="角色（user, assistant）")
+    content = Column(Text, nullable=False, comment="消息内容")
+    sql_statement = Column(Text, nullable=True, comment="生成的SQL（assistant角色）")
+    query_result = Column(Text, nullable=True, comment="查询结果（JSON格式）")
+    chart_config = Column(Text, nullable=True, comment="图表配置（JSON格式）")
+    chart_type = Column(String(50), nullable=True, comment="图表类型")
+    error_message = Column(Text, nullable=True, comment="错误信息（如有）")
+    tokens_used = Column(Integer, nullable=True, comment="使用的token数")
+    response_time = Column(String(20), nullable=True, comment="响应时间（秒）")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
+    
+    # 关系
+    session = relationship("ChatSession", back_populates="messages")
+
+
+class Dashboard(Base):
+    """仪表板模型"""
+    __tablename__ = "dashboards"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, comment="用户ID")
+    name = Column(String(200), nullable=False, comment="仪表板名称")
+    description = Column(Text, nullable=True, comment="描述")
+    layout_config = Column(Text, nullable=True, comment="布局配置（JSON格式）")
+    is_public = Column(Boolean, default=False, comment="是否公开")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
+    
+    # 关系
+    user = relationship("User", foreign_keys=[user_id], overlaps="dashboards")
+    widgets = relationship("DashboardWidget", back_populates="dashboard", cascade="all, delete-orphan")
+
+
+class DashboardWidget(Base):
+    """仪表板组件模型"""
+    __tablename__ = "dashboard_widgets"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    dashboard_id = Column(Integer, ForeignKey("dashboards.id", ondelete="CASCADE"), nullable=False, comment="仪表板ID")
+    widget_type = Column(String(50), nullable=False, comment="组件类型（chart, table等）")
+    title = Column(String(200), nullable=False, comment="组件标题")
+    config = Column(Text, nullable=False, comment="组件配置（JSON格式）")
+    position_x = Column(Integer, default=0, comment="X坐标")
+    position_y = Column(Integer, default=0, comment="Y坐标")
+    width = Column(Integer, default=400, comment="宽度")
+    height = Column(Integer, default=300, comment="高度")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
+    
+    # 关系
+    dashboard = relationship("Dashboard", back_populates="widgets")
 

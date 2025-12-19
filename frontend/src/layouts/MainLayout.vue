@@ -7,6 +7,7 @@
       
       <el-menu
         :default-active="activeMenu"
+        :default-openeds="['sqlbot']"
         router
         class="sidebar-menu"
       >
@@ -34,6 +35,33 @@
           <el-icon><Document /></el-icon>
           <span>API文档</span>
         </el-menu-item>
+        
+        <el-sub-menu index="sqlbot">
+          <template #title>
+            <el-icon><ChatLineRound /></el-icon>
+            <span>智能问数</span>
+          </template>
+          <el-menu-item index="/ai-model-config">
+            <el-icon><Cpu /></el-icon>
+            <span>AI模型配置</span>
+          </el-menu-item>
+          <el-menu-item index="/terminology-config">
+            <el-icon><Collection /></el-icon>
+            <span>术语配置</span>
+          </el-menu-item>
+          <el-menu-item index="/sql-example-config">
+            <el-icon><DocumentCopy /></el-icon>
+            <span>SQL示例配置</span>
+          </el-menu-item>
+          <el-menu-item index="/prompt-config">
+            <el-icon><EditPen /></el-icon>
+            <span>自定义提示词</span>
+          </el-menu-item>
+          <el-menu-item index="/knowledge-config">
+            <el-icon><Reading /></el-icon>
+            <span>业务知识库</span>
+          </el-menu-item>
+        </el-sub-menu>
       </el-menu>
     </el-aside>
     
@@ -76,7 +104,21 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage } from 'element-plus'
-import { DataBoard, Connection, List, Tools, Document, User, ArrowDown } from '@element-plus/icons-vue'
+import { 
+  DataBoard, 
+  Connection, 
+  List, 
+  Tools, 
+  Document, 
+  User, 
+  ArrowDown,
+  ChatLineRound,
+  Cpu,
+  Collection,
+  DocumentCopy,
+  EditPen,
+  Reading
+} from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -90,7 +132,12 @@ const pageTitle = computed(() => {
     '/database-config': '数据源配置',
     '/interface-list': '接口清单',
     '/interface-config': '数据表转接口',
-    '/api-docs': 'API文档'
+    '/api-docs': 'API文档',
+    '/ai-model-config': 'AI模型配置',
+    '/terminology-config': '术语配置',
+    '/sql-example-config': 'SQL示例配置',
+    '/prompt-config': '自定义提示词',
+    '/knowledge-config': '业务知识库'
   }
   return titles[route.path] || '表转接口服务'
 })
@@ -183,6 +230,72 @@ const handleCommand = (command) => {
 
 .sidebar-menu :deep(.el-menu-item .el-icon) {
   font-size: 18px;
+  margin-right: 8px;
+}
+
+/* 子菜单样式 */
+.sidebar-menu :deep(.el-sub-menu) {
+  margin: 4px 12px;
+}
+
+.sidebar-menu :deep(.el-sub-menu__title) {
+  color: rgba(255, 255, 255, 0.75);
+  border-radius: 8px;
+  transition: all 0.3s;
+  height: 48px;
+  line-height: 48px;
+  padding: 0 20px;
+}
+
+.sidebar-menu :deep(.el-sub-menu__title:hover) {
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.2) 0%, rgba(118, 75, 162, 0.2) 100%);
+  color: white;
+  transform: translateX(4px);
+}
+
+.sidebar-menu :deep(.el-sub-menu.is-opened > .el-sub-menu__title) {
+  color: white;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.3) 0%, rgba(118, 75, 162, 0.3) 100%);
+}
+
+.sidebar-menu :deep(.el-sub-menu .el-icon) {
+  font-size: 18px;
+  margin-right: 8px;
+}
+
+/* 子菜单项样式 - 保持与主菜单一致的深色背景 */
+.sidebar-menu :deep(.el-sub-menu .el-menu) {
+  background-color: transparent !important;
+  border-radius: 8px;
+  margin-top: 4px;
+  padding: 4px 0;
+}
+
+.sidebar-menu :deep(.el-sub-menu .el-menu-item) {
+  color: rgba(255, 255, 255, 0.85);
+  margin: 2px 8px;
+  padding-left: 40px !important;
+  border-radius: 6px;
+  height: 44px;
+  line-height: 44px;
+  background-color: transparent !important;
+}
+
+.sidebar-menu :deep(.el-sub-menu .el-menu-item:hover) {
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.3) 0%, rgba(118, 75, 162, 0.3) 100%) !important;
+  color: white;
+  transform: translateX(4px);
+}
+
+.sidebar-menu :deep(.el-sub-menu .el-menu-item.is-active) {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+  color: white;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  font-weight: 600;
+}
+
+.sidebar-menu :deep(.el-sub-menu .el-menu-item .el-icon) {
+  font-size: 16px;
   margin-right: 8px;
 }
 

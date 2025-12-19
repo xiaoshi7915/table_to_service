@@ -37,7 +37,32 @@ const routes = [
       {
         path: 'api-docs',
         name: 'ApiDocs',
-        component: () => import('@/views/ApiDocs.vue')
+        component: () => import(/* webpackChunkName: "api-docs" */ '@/views/ApiDocs.vue')
+      },
+      {
+        path: 'ai-model-config',
+        name: 'AIModelConfig',
+        component: () => import('@/views/AIModelConfig.vue')
+      },
+      {
+        path: 'terminology-config',
+        name: 'TerminologyConfig',
+        component: () => import('@/views/TerminologyConfig.vue')
+      },
+      {
+        path: 'sql-example-config',
+        name: 'SQLExampleConfig',
+        component: () => import('@/views/SQLExampleConfig.vue')
+      },
+      {
+        path: 'prompt-config',
+        name: 'PromptConfig',
+        component: () => import('@/views/PromptConfig.vue')
+      },
+      {
+        path: 'knowledge-config',
+        name: 'KnowledgeConfig',
+        component: () => import('@/views/KnowledgeConfig.vue')
       }
     ]
   }
