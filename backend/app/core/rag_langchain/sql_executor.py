@@ -11,6 +11,7 @@ from loguru import logger
 from app.models import DatabaseConfig
 from app.core.db_factory import DatabaseConnectionFactory
 from app.core.sql_dialect import SQLDialectFactory
+from app.core.data_masking import DataMaskingService
 
 
 class SQLExecutor:
@@ -144,7 +145,7 @@ class SQLExecutor:
         if not sql_upper.startswith("SELECT"):
             raise ValueError("只允许执行SELECT查询语句")
         
-        # 禁止危险操作
+        # 禁止危险操作（修改数据操作）
         dangerous_keywords = [
             "DROP", "DELETE", "TRUNCATE", "ALTER", "CREATE",
             "INSERT", "UPDATE", "REPLACE", "GRANT", "REVOKE",
@@ -153,7 +154,22 @@ class SQLExecutor:
         
         for keyword in dangerous_keywords:
             if keyword in sql_upper:
-                raise ValueError(f"禁止执行包含 {keyword} 的SQL语句")
+                raise ValueError(f"禁止执行包含 {keyword} 的SQL语句。您没有权限执行修改数据的操作，请使用查询操作。")
+        
+        # 检查是否查询所有数据明细（没有WHERE条件且没有LIMIT）
+        import re
+        # 检查是否有WHERE子句
+        has_where = bool(re.search(r'\bWHERE\b', sql_upper))
+        # 检查是否有LIMIT子句
+        has_limit = bool(re.search(r'\bLIMIT\s+\d+\b', sql_upper))
+        # 检查是否有聚合函数（COUNT, SUM等），如果有聚合函数，通常不是查询所有明细
+        has_aggregate = bool(re.search(r'\b(COUNT|SUM|AVG|MAX|MIN|GROUP\s+BY)\b', sql_upper))
+        
+        # 如果没有WHERE、没有LIMIT、没有聚合函数，可能是查询所有数据明细
+        if not has_where and not has_limit and not has_aggregate:
+            # 检查SELECT的字段，如果是SELECT *，则很可能是查询所有明细
+            if re.search(r'SELECT\s+\*', sql_upper):
+                raise ValueError("为了数据安全和性能考虑，不允许查询所有数据明细。请添加WHERE条件、LIMIT限制或使用聚合函数（如COUNT、SUM等）进行统计查询。")
         
         # 检查SQL注入模式
         sql_injection_patterns = [
@@ -165,7 +181,6 @@ class SQLExecutor:
             r"INTO.*OUTFILE"
         ]
         
-        import re
         for pattern in sql_injection_patterns:
             if re.search(pattern, sql_upper, re.IGNORECASE):
                 raise ValueError("检测到潜在的SQL注入攻击")
@@ -207,20 +222,21 @@ class SQLExecutor:
         columns: Any
     ) -> List[Dict[str, Any]]:
         """
-        处理查询结果
+        处理查询结果（包含数据脱敏）
         
         Args:
             rows: 查询结果行
             columns: 列名
             
         Returns:
-            处理后的数据列表
+            处理后的数据列表（已脱敏）
         """
         data = []
+        column_list = list(columns) if hasattr(columns, '__iter__') else list(columns)
         
         for row in rows[:self.max_rows]:  # 限制行数
             row_dict = {}
-            for i, col in enumerate(columns):
+            for i, col in enumerate(column_list):
                 value = row[i]
                 
                 # 数据类型转换
@@ -243,6 +259,14 @@ class SQLExecutor:
                     row_dict[col] = str(value)
             
             data.append(row_dict)
+        
+        # 对数据进行脱敏处理（隐私信息保护）
+        try:
+            data = DataMaskingService.mask_data(data, column_list)
+            logger.debug(f"已对查询结果进行数据脱敏处理，共处理 {len(data)} 条记录")
+        except Exception as e:
+            logger.warning(f"数据脱敏处理失败: {e}，返回原始数据")
+            # 脱敏失败不影响主流程，返回原始数据
         
         return data
     

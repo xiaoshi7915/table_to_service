@@ -74,6 +74,35 @@
           <div class="message-content">
             <div v-if="message.role === 'user'" class="message-text">
               {{ message.content }}
+              <!-- 显示问题改写信息（如果有） -->
+              <div v-if="message.question_rewrite && message.question_rewrite.rewritten !== message.content" class="question-rewrite-info">
+                <el-collapse>
+                  <el-collapse-item name="rewrite">
+                    <template #title>
+                      <el-icon><Edit /></el-icon>
+                      <span style="margin-left: 4px; font-size: 12px; color: #909399">
+                        问题已优化（点击查看）
+                      </span>
+                    </template>
+                    <div class="rewrite-details">
+                      <div class="rewrite-item">
+                        <span class="rewrite-label">原始问题：</span>
+                        <span class="rewrite-value">{{ message.question_rewrite.original }}</span>
+                      </div>
+                      <div class="rewrite-item">
+                        <span class="rewrite-label">优化后：</span>
+                        <span class="rewrite-value rewritten">{{ message.question_rewrite.rewritten }}</span>
+                      </div>
+                      <div v-if="message.question_rewrite.changes && message.question_rewrite.changes.length > 0" class="rewrite-item">
+                        <span class="rewrite-label">优化说明：</span>
+                        <ul class="rewrite-changes">
+                          <li v-for="(change, idx) in message.question_rewrite.changes" :key="idx">{{ change }}</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </el-collapse-item>
+                </el-collapse>
+              </div>
             </div>
             
             <div v-else class="assistant-content">
@@ -98,22 +127,74 @@
                   </div>
                 </div>
                 <pre class="sql-code">{{ message.sql }}</pre>
+                
+                <!-- 复杂SQL提示（包含CREATE等语句，需要手动执行） -->
+                <div v-if="message.contains_complex_sql" class="complex-sql-notice">
+                  <el-alert
+                    title="此SQL包含复杂逻辑，需要手动执行"
+                    type="info"
+                    :closable="false"
+                    show-icon
+                  >
+                    <template #default>
+                      <div class="complex-sql-info">
+                        <p>生成的SQL包含CREATE等语句，为了数据安全，系统不会自动执行此类SQL。</p>
+                        <p><strong>说明：</strong></p>
+                        <ul>
+                          <li>您可以在数据库管理工具中手动执行此SQL</li>
+                          <li>建议：如果可能，请尝试用更简单的查询方式重新提问，例如使用子查询或CTE（WITH子句）代替临时表</li>
+                        </ul>
+                      </div>
+                    </template>
+                  </el-alert>
+                </div>
+                
                 <!-- 错误信息 -->
                 <div v-if="message.error || message.error_message" class="error-message">
                   <el-alert
-                    :title="message.error || message.error_message"
+                    :title="`SQL执行失败：${message.error || message.error_message}`"
                     type="error"
                     :closable="false"
                     show-icon
                   >
                     <template #default>
-                      <div style="margin-top: 8px">
-                        <el-button size="small" type="primary" @click="showEditSQLDialog(message)">
-                          编辑SQL并重试
-                        </el-button>
+                      <div class="error-actions">
+                        <div class="error-description">
+                          <p><strong>执行的SQL：</strong></p>
+                          <pre class="error-sql">{{ message.sql }}</pre>
+                          <p><strong>错误原因：</strong>{{ message.error || message.error_message }}</p>
+                        </div>
+                        <div class="error-buttons">
+                          <el-button size="small" type="primary" @click="showEditSQLDialog(message)">
+                            <el-icon><Edit /></el-icon>
+                            直接编辑SQL
+                          </el-button>
+                          <el-button size="small" type="success" @click="continueWithNaturalLanguage(message)">
+                            <el-icon><ChatLineRound /></el-icon>
+                            继续用自然语言提问
+                          </el-button>
+                        </div>
                       </div>
                     </template>
                   </el-alert>
+                  
+                  <!-- 错误时也显示推荐问题 -->
+                  <div v-if="message.recommended_questions && message.recommended_questions.length > 0" class="recommended-questions-section" style="margin-top: 12px">
+                    <div class="recommended-questions-header">
+                      <el-icon><ChatLineRound /></el-icon>
+                      <span>猜你想问</span>
+                    </div>
+                    <div class="recommended-questions-list">
+                      <el-tag
+                        v-for="(question, idx) in message.recommended_questions"
+                        :key="idx"
+                        class="recommended-question-tag"
+                        @click="selectRecommendedQuestion(question, message)"
+                      >
+                        {{ question }}
+                      </el-tag>
+                    </div>
+                  </div>
                 </div>
               </div>
               
@@ -189,6 +270,24 @@
               <div v-if="message.explanation" class="explanation-section">
                 {{ message.explanation }}
               </div>
+              
+              <!-- 推荐问题（显示在AI回复下方，基于当前会话上下文） -->
+              <div v-if="message.recommended_questions && message.recommended_questions.length > 0" class="recommended-questions-section">
+                <div class="recommended-questions-header">
+                  <el-icon><ChatLineRound /></el-icon>
+                  <span>猜你想问</span>
+                </div>
+                <div class="recommended-questions-list">
+                  <el-tag
+                    v-for="(question, idx) in message.recommended_questions"
+                    :key="idx"
+                    class="recommended-question-tag"
+                    @click="selectRecommendedQuestion(question, message)"
+                  >
+                    {{ question }}
+                  </el-tag>
+                </div>
+              </div>
             </div>
           </div>
           
@@ -220,23 +319,6 @@
           <el-button type="primary" @click="sendMessage" :loading="loading">
             发送
           </el-button>
-        </div>
-      </div>
-    </div>
-    
-    <!-- 右侧：推荐问题（可选） -->
-    <div class="chat-sidebar-right">
-      <div class="sidebar-header">
-        <h3>猜你想问</h3>
-      </div>
-      <div class="recommended-questions">
-        <div
-          v-for="(question, index) in recommendedQuestions"
-          :key="index"
-          class="question-item"
-          @click="selectQuestion(question)"
-        >
-          {{ question }}
         </div>
       </div>
     </div>
@@ -366,7 +448,7 @@
 import { ref, onMounted, nextTick, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as echarts from 'echarts'
-import { Plus, Delete, DocumentCopy, Download, Loading, DataBoard } from '@element-plus/icons-vue'
+import { Plus, Delete, DocumentCopy, Download, Loading, DataBoard, Edit, ChatLineRound } from '@element-plus/icons-vue'
 import chatApi from '@/api/chat'
 import request from '@/utils/request'
 import dashboardsApi from '@/api/dashboards'
@@ -447,11 +529,19 @@ const loadMessages = async (sessionId) => {
     const response = await chatApi.getMessages(sessionId)
     if (response.code === 200) {
       messages.value = response.data || []
-      // 为每个消息初始化图表类型
+      // 为每个消息初始化图表类型和推荐问题
       messages.value.forEach(msg => {
         if (msg.chart_config) {
           msg.chart_type = msg.chart_config.type || 'table'
           msg.columns = msg.chart_config.columns || Object.keys(msg.data?.[0] || {})
+        }
+        // 确保推荐问题字段存在（如果没有则初始化为空数组）
+        if (!msg.recommended_questions) {
+          msg.recommended_questions = []
+        }
+        // 确保contains_complex_sql字段存在
+        if (msg.contains_complex_sql === undefined) {
+          msg.contains_complex_sql = false
         }
       })
       await nextTick()
@@ -639,8 +729,33 @@ const sendMessage = async () => {
     })
     
     if (response.code === 200 || response.success) {
+      // 保存问题改写信息到最后一个用户消息（如果有）
+      if (response.data?.question_rewrite) {
+        // 找到最后一条用户消息并添加改写信息
+        const lastUserMessage = messages.value.filter(m => m.role === 'user').pop()
+        if (lastUserMessage) {
+          lastUserMessage.question_rewrite = response.data.question_rewrite
+        }
+      }
+      
       await loadMessages(currentSessionId.value)
-      await loadRecommendedQuestions()
+      
+      // 将推荐问题和复杂SQL标记保存到对应的AI回复消息中
+      if (response.data?.recommended_questions && response.data.recommended_questions.length > 0) {
+        // 找到最后一条AI回复消息并添加推荐问题
+        const lastAssistantMessage = messages.value.filter(m => m.role === 'assistant').pop()
+        if (lastAssistantMessage) {
+          lastAssistantMessage.recommended_questions = response.data.recommended_questions
+        }
+      }
+      
+      // 保存复杂SQL标记
+      if (response.data?.contains_complex_sql !== undefined) {
+        const lastAssistantMessage = messages.value.filter(m => m.role === 'assistant').pop()
+        if (lastAssistantMessage) {
+          lastAssistantMessage.contains_complex_sql = response.data.contains_complex_sql
+        }
+      }
       
       // 滚动到底部
       await nextTick()
@@ -649,9 +764,27 @@ const sendMessage = async () => {
         messagesContainer.scrollTop = messagesContainer.scrollHeight
       }
     } else {
-      // 如果失败但有SQL，允许用户编辑重试
+      // 如果失败但有SQL，允许用户编辑重试或继续用自然语言提问
       if (response.data?.sql && response.data?.can_retry) {
-        ElMessage.warning('SQL执行失败，您可以编辑SQL后重试')
+        // 重新加载消息以显示错误信息
+        await loadMessages(currentSessionId.value)
+        
+        // 如果响应中包含推荐问题，保存到错误消息中
+        if (response.data?.recommended_questions && response.data.recommended_questions.length > 0) {
+          const lastAssistantMessage = messages.value.filter(m => m.role === 'assistant').pop()
+          if (lastAssistantMessage) {
+            lastAssistantMessage.recommended_questions = response.data.recommended_questions
+          }
+        }
+        
+        ElMessage.warning('SQL执行失败，您可以编辑SQL后重试或继续用自然语言提问')
+      } else if (response.data?.warnings && response.data.warnings.length > 0) {
+        // 权限警告
+        ElMessage.warning({
+          message: response.data.warnings[0] + (response.data.suggestion ? '\n' + response.data.suggestion : ''),
+          duration: 5000,
+          showClose: true
+        })
       } else {
         ElMessage.error(response.message || '发送失败')
       }
@@ -681,7 +814,13 @@ const loadRecommendedQuestions = async () => {
   }
 }
 
-// 选择推荐问题
+// 选择推荐问题（从AI回复下方的推荐问题）
+const selectRecommendedQuestion = (question, message) => {
+  inputText.value = question
+  sendMessage()
+}
+
+// 选择推荐问题（保留原有方法，用于兼容）
 const selectQuestion = (question) => {
   inputText.value = question
   
@@ -713,11 +852,71 @@ const selectQuestion = (question) => {
   sendMessage()
 }
 
-// 复制SQL
+// 继续用自然语言提问（当SQL执行错误时）
+const continueWithNaturalLanguage = (message) => {
+  // 将错误信息作为上下文，让用户继续提问
+  if (message.error || message.error_message) {
+    // 可以自动填充一些提示文本，或者直接让用户输入
+    inputText.value = ''
+    // 聚焦到输入框
+    nextTick(() => {
+      const input = document.querySelector('.chat-input textarea')
+      if (input) {
+        input.focus()
+      }
+    })
+  }
+}
+
+// 复制SQL（带错误处理和降级方案）
 const copySQL = (sql) => {
-  navigator.clipboard.writeText(sql).then(() => {
-    ElMessage.success('SQL已复制到剪贴板')
-  })
+  // 检查SQL是否为空
+  if (!sql || !sql.trim()) {
+    ElMessage.warning('没有可复制的SQL')
+    return
+  }
+  
+  // 降级复制函数（使用document.execCommand）
+  const fallbackCopy = (text) => {
+    try {
+      // 创建临时文本区域
+      const textArea = document.createElement('textarea')
+      textArea.value = text
+      textArea.style.position = 'fixed'
+      textArea.style.left = '-999999px'
+      textArea.style.top = '-999999px'
+      document.body.appendChild(textArea)
+      textArea.focus()
+      textArea.select()
+      
+      // 尝试复制
+      const successful = document.execCommand('copy')
+      document.body.removeChild(textArea)
+      
+      if (successful) {
+        ElMessage.success('SQL已复制到剪贴板')
+      } else {
+        ElMessage.error('复制失败，请手动复制')
+      }
+    } catch (err) {
+      console.error('降级复制方案失败:', err)
+      ElMessage.error('复制失败，请手动复制')
+    }
+  }
+  
+  // 优先使用现代 Clipboard API
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(sql).then(() => {
+      ElMessage.success('SQL已复制到剪贴板')
+    }).catch((err) => {
+      console.error('Clipboard API复制失败:', err)
+      // 降级到传统方法
+      fallbackCopy(sql)
+    })
+  } else {
+    // 浏览器不支持 Clipboard API，使用降级方案
+    fallbackCopy(sql)
+  }
 }
 
 // 导出数据
@@ -1275,29 +1474,147 @@ onMounted(async () => {
   text-align: right;
 }
 
-.chat-sidebar-right {
-  width: 200px;
-  background: white;
-  border-left: 1px solid #e4e7ed;
-  padding: 16px;
-}
-
-.recommended-questions {
+/* 推荐问题样式（现在显示在AI回复下方） */
+.recommended-questions-section {
   margin-top: 16px;
+  padding: 12px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e4e7ed;
 }
 
-.question-item {
-  padding: 8px 12px;
-  margin-bottom: 8px;
-  background: #f5f7fa;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background 0.2s;
+.recommended-questions-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-weight: 600;
+  color: #606266;
   font-size: 14px;
 }
 
-.question-item:hover {
-  background: #ecf5ff;
+.recommended-questions-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.recommended-question-tag {
+  cursor: pointer;
+  transition: all 0.2s;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.recommended-question-tag:hover {
+  background: #409eff;
+  color: white;
+  transform: translateY(-2px);
+  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.3);
+}
+
+.question-rewrite-info {
+  margin-top: 8px;
+  padding: 8px;
+  background: #f0f9ff;
+  border-left: 3px solid #409eff;
+  border-radius: 4px;
+}
+
+.rewrite-details {
+  padding: 8px 0;
+}
+
+.rewrite-item {
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.rewrite-item:last-child {
+  margin-bottom: 0;
+}
+
+.rewrite-label {
+  color: #606266;
+  font-weight: 500;
+  margin-right: 8px;
+}
+
+.rewrite-value {
+  color: #303133;
+}
+
+.rewrite-value.rewritten {
+  color: #409eff;
+  font-weight: 500;
+}
+
+.rewrite-changes {
+  margin: 4px 0 0 20px;
+  padding: 0;
+  color: #909399;
+  font-size: 12px;
+}
+
+.rewrite-changes li {
+  margin-bottom: 4px;
+}
+
+.error-actions {
+  margin-top: 12px;
+}
+
+.error-description {
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.error-description p {
+  margin: 8px 0;
+  color: #606266;
+}
+
+.error-sql {
+  background: #282c34;
+  color: #abb2bf;
+  padding: 8px 12px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  margin: 8px 0;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.error-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.complex-sql-notice {
+  margin-top: 12px;
+}
+
+.complex-sql-info {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #606266;
+}
+
+.complex-sql-info p {
+  margin: 8px 0;
+}
+
+.complex-sql-info ul {
+  margin: 8px 0 0 20px;
+  padding: 0;
+}
+
+.complex-sql-info li {
+  margin-bottom: 4px;
 }
 </style>
 

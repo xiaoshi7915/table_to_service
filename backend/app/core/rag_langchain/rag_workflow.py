@@ -228,13 +228,16 @@ class RAGWorkflow:
 {question}
 
 ## 要求
-1. 只生成SELECT查询语句，不要生成INSERT、UPDATE、DELETE等修改语句
-2. 使用参数化查询防止SQL注入（使用:param_name格式）
-3. 根据问题意图选择合适的聚合函数（SUM、COUNT、AVG、MAX、MIN等）
-4. 合理使用GROUP BY、ORDER BY、LIMIT等子句
-5. 生成的SQL要符合{db_type.upper()}语法规范
-6. 如果问题中提到了业务术语，请使用对应的数据库字段名
-7. 注意表之间的关联关系，使用正确的JOIN语句
+1. **只生成SELECT查询语句**，绝对不要生成INSERT、UPDATE、DELETE、CREATE、DROP、ALTER等任何修改或建表语句
+2. **禁止使用临时表**：如果查询逻辑复杂，请使用子查询、CTE（WITH子句）或JOIN来实现，不要创建临时表
+3. 使用参数化查询防止SQL注入（使用:param_name格式）
+4. 根据问题意图选择合适的聚合函数（SUM、COUNT、AVG、MAX、MIN等）
+5. 合理使用GROUP BY、ORDER BY、LIMIT等子句
+6. 生成的SQL要符合{db_type.upper()}语法规范
+7. 如果问题中提到了业务术语，请使用对应的数据库字段名
+8. 注意表之间的关联关系，使用正确的JOIN语句
+
+**重要：如果查询需要复杂逻辑，请使用子查询或CTE，不要使用CREATE TABLE语句。**
 
 请直接返回SQL语句，不要包含其他解释："""
         
@@ -265,7 +268,23 @@ class RAGWorkflow:
                 
                 # 提取SQL（移除可能的Markdown格式）
                 sql = self._extract_sql(sql)
+                
+                # 检查SQL是否包含不允许的语句（CREATE、DROP等）
+                sql_upper = sql.upper().strip()
+                forbidden_keywords = ["CREATE", "DROP", "ALTER", "INSERT", "UPDATE", "DELETE", "TRUNCATE"]
+                contains_forbidden = any(keyword in sql_upper for keyword in forbidden_keywords)
+                
+                if contains_forbidden:
+                    # 如果包含不允许的语句，标记为需要用户手动处理
+                    logger.warning(f"生成的SQL包含不允许的语句: {sql[:200]}...")
+                    state["sql"] = sql  # 保存完整SQL
+                    state["contains_complex_sql"] = True  # 标记为复杂SQL
+                    state["execution_error"] = None  # 不是执行错误，而是需要用户手动处理
+                    state["sql_execution_result"] = None
+                    return state
+                
                 state["sql"] = sql
+                state["contains_complex_sql"] = False
                 
                 logger.info(f"生成SQL: {sql[:100]}...")
             except Exception as e:
@@ -316,6 +335,18 @@ class RAGWorkflow:
         sql = state["sql"]
         db_config = state["db_config"]
         
+        # 如果SQL包含复杂逻辑（如CREATE语句），不执行，直接返回
+        if state.get("contains_complex_sql", False):
+            state["execution_error"] = None  # 不是错误，而是需要用户手动处理
+            state["sql_execution_result"] = {
+                "success": False,
+                "error": "complex_sql_requires_manual_handling",
+                "sql": sql
+            }
+            state["final_sql"] = sql
+            logger.info("SQL包含复杂逻辑（如CREATE语句），跳过执行，返回SQL给用户")
+            return state
+        
         if not sql:
             state["execution_error"] = "SQL语句为空"
             state["sql_execution_result"] = None
@@ -348,14 +379,18 @@ class RAGWorkflow:
                 
                 logger.info(f"SQL执行成功，返回 {result['row_count']} 条数据，耗时 {result.get('execution_time', 0):.2f}秒")
             else:
-                state["execution_error"] = result.get("error", "SQL执行失败")
+                error_msg = result.get("error", "SQL执行失败")
+                state["execution_error"] = error_msg
                 state["sql_execution_result"] = {
                     "success": False,
-                    "error": result.get("error", "SQL执行失败")
+                    "error": error_msg
                 }
+                # 确保SQL被保存到final_sql，即使执行失败
+                if sql and not state.get("final_sql"):
+                    state["final_sql"] = sql
                 state["retry_count"] = state.get("retry_count", 0) + 1
                 
-                logger.warning(f"SQL执行失败: {result.get('error', '未知错误')}")
+                logger.warning(f"SQL执行失败: {error_msg}")
             
         except Exception as e:
             error_msg = str(e)
@@ -364,6 +399,9 @@ class RAGWorkflow:
                 "success": False,
                 "error": error_msg
             }
+            # 确保SQL被保存到final_sql，即使执行失败
+            if sql and not state.get("final_sql"):
+                state["final_sql"] = sql
             state["retry_count"] = state.get("retry_count", 0) + 1
             
             logger.warning(f"SQL执行失败: {error_msg}")
@@ -484,15 +522,35 @@ class RAGWorkflow:
     def _extract_sql(self, text: str) -> str:
         """从文本中提取SQL"""
         import re
-        
+
         # 移除Markdown代码块
         text = re.sub(r'```(?:sql)?\s*\n?(.*?)\n?```', r'\1', text, flags=re.DOTALL)
-        
-        # 提取SELECT语句
+
+        # 检查是否包含CREATE等语句
+        text_upper = text.upper()
+        if "CREATE" in text_upper or "DROP" in text_upper or "ALTER" in text_upper:
+            # 如果包含CREATE等语句，返回完整SQL（不执行，只提供给用户）
+            # 尝试提取所有SQL语句（包括CREATE和SELECT）
+            sql_parts = []
+            # 提取CREATE语句
+            create_match = re.search(r'(CREATE\s+.*?)(?:;|$)', text, re.DOTALL | re.IGNORECASE)
+            if create_match:
+                sql_parts.append(create_match.group(1).strip())
+            # 提取SELECT语句
+            select_match = re.search(r'(SELECT\s+.*?)(?:;|$)', text, re.DOTALL | re.IGNORECASE)
+            if select_match:
+                sql_parts.append(select_match.group(1).strip())
+            
+            if sql_parts:
+                return "\n\n".join(sql_parts)
+            # 如果没有找到，返回原始文本
+            return ' '.join(text.split()).strip()
+
+        # 提取SELECT语句（正常情况）
         match = re.search(r'(SELECT\s+.*?)(?:;|$)', text, re.DOTALL | re.IGNORECASE)
         if match:
             return match.group(1).strip()
-        
+
         # 清理空白
         return ' '.join(text.split()).strip()
     
@@ -582,14 +640,32 @@ class RAGWorkflow:
             final_result = result.get("final_result", {})
             if not final_result:
                 # 如果final_result为空，从状态中提取
+                # 确保SQL被正确提取（优先使用final_sql，如果没有则使用sql）
+                extracted_sql = result.get("final_sql") or result.get("sql", "")
                 final_result = {
-                    "sql": result.get("final_sql", result.get("sql", "")),
+                    "sql": extracted_sql,
+                    "final_sql": extracted_sql,  # 确保final_sql字段存在
                     "data": result.get("sql_execution_result", {}).get("data", []) if result.get("sql_execution_result") and result.get("sql_execution_result").get("success") else [],
                     "chart_config": result.get("chart_config"),
                     "explanation": result.get("explanation", ""),
                     "retry_count": result.get("retry_count", 0),
-                    "error": result.get("execution_error")
+                    "error": result.get("execution_error"),
+                    "contains_complex_sql": result.get("contains_complex_sql", False)  # 添加复杂SQL标记
                 }
+            
+            # 确保返回contains_complex_sql字段和final_sql字段
+            if "contains_complex_sql" not in final_result:
+                final_result["contains_complex_sql"] = result.get("contains_complex_sql", False)
+            
+            # 确保final_sql字段存在（即使执行失败也要返回SQL）
+            if "final_sql" not in final_result or not final_result.get("final_sql"):
+                final_result["final_sql"] = result.get("final_sql") or result.get("sql", "")
+            
+            # 确保sql字段也存在（向后兼容）
+            if "sql" not in final_result or not final_result.get("sql"):
+                final_result["sql"] = final_result.get("final_sql", "")
+            
+            logger.info(f"工作流返回结果：SQL={final_result.get('final_sql', '')[:100] if final_result.get('final_sql') else '空'}, 错误={final_result.get('error', '无')}")
             
             return final_result
         except Exception as e:
