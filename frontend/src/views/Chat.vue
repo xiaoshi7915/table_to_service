@@ -18,7 +18,18 @@
           :class="{ active: currentSessionId === session.id }"
           @click="selectSession(session.id)"
         >
-          <div class="session-title">{{ session.title || '新对话' }}</div>
+          <div class="session-title">
+            <span>{{ session.title || '新对话' }}</span>
+            <el-button
+              type="primary"
+              size="small"
+              text
+              @click.stop="editSessionTitle(session)"
+              style="margin-left: 8px"
+            >
+              <el-icon><Edit /></el-icon>
+            </el-button>
+          </div>
           <div class="session-meta">
             <span class="session-time">{{ formatTime(session.created_at) }}</span>
             <el-button
@@ -349,9 +360,6 @@
         </el-alert>
         
         <el-form :model="createSessionForm" label-width="100px">
-          <el-form-item label="对话标题">
-            <el-input v-model="createSessionForm.title" placeholder="请输入对话标题（可选）" />
-          </el-form-item>
           <el-form-item label="数据源" required>
             <el-select
               v-model="createSessionForm.data_source_id"
@@ -377,9 +385,9 @@
             >
               <el-option
                 v-for="table in tables"
-                :key="table.name"
-                :label="table.name"
-                :value="table.name"
+                :key="table.name || table"
+                :label="table.name || table"
+                :value="table.name || table"
               />
             </el-select>
             <div v-if="loadingTables" style="margin-top: 8px; color: #909399; font-size: 12px">
@@ -483,7 +491,7 @@
 import { ref, onMounted, nextTick, watch, h } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as echarts from 'echarts'
-import { Plus, Delete, DocumentCopy, Download, Loading, DataBoard, Edit, ChatLineRound } from '@element-plus/icons-vue'
+import { Plus, Delete, DocumentCopy, Download, Loading, DataBoard, Edit, ChatLineRound, Connection, Grid } from '@element-plus/icons-vue'
 import chatApi from '@/api/chat'
 import request from '@/utils/request'
 import dashboardsApi from '@/api/dashboards'
@@ -500,7 +508,6 @@ const chartInstances = ref({})
 // 新建会话相关
 const createSessionDialogVisible = ref(false)
 const createSessionForm = ref({
-  title: '',
   data_source_id: null,
   selected_tables: []
 })
@@ -664,8 +671,8 @@ const confirmCreateSession = async () => {
   }
   
   try {
+    // 不传title，让后端自动生成默认标题
     const response = await chatApi.createSession({
-      title: createSessionForm.value.title || `对话 ${new Date().toLocaleString('zh-CN')}`,
       data_source_id: createSessionForm.value.data_source_id,
       selected_tables: createSessionForm.value.selected_tables
     })
@@ -685,7 +692,6 @@ const confirmCreateSession = async () => {
 // 重置创建会话表单
 const resetCreateSessionForm = () => {
   createSessionForm.value = {
-    title: '',
     data_source_id: null,
     selected_tables: []
   }
@@ -697,17 +703,83 @@ const createNewSession = () => {
   showCreateSessionDialog()
 }
 
+// 编辑对话标题
+const editSessionTitle = async (session) => {
+  try {
+    const { value: newTitle } = await ElMessageBox.prompt(
+      '请输入新的对话标题',
+      '编辑标题',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        inputValue: session.title || '',
+        inputPlaceholder: '请输入标题',
+        inputValidator: (value) => {
+          if (!value || !value.trim()) {
+            return '标题不能为空'
+          }
+          if (value.length > 100) {
+            return '标题长度不能超过100个字符'
+          }
+          return true
+        }
+      }
+    )
+    
+    if (newTitle && newTitle.trim()) {
+      const response = await chatApi.updateSession(session.id, {
+        title: newTitle.trim()
+      })
+      
+      if (response.code === 200) {
+        ElMessage.success('标题更新成功')
+        await loadSessions()
+        // 如果当前正在查看这个会话，更新currentSession
+        if (currentSessionId.value === session.id && currentSession.value) {
+          currentSession.value.title = newTitle.trim()
+        }
+      }
+    }
+  } catch (error) {
+    // 用户取消编辑
+    if (error !== 'cancel') {
+      ElMessage.error('更新标题失败：' + (error.response?.data?.detail || error.message || '未知错误'))
+    }
+  }
+}
+
 // 删除对话
 const deleteSession = async (sessionId) => {
+  // 找到要删除的会话信息
+  const session = sessions.value.find(s => s.id === sessionId)
+  const sessionTitle = session?.title || '该对话'
+  
   try {
+    await ElMessageBox.confirm(
+      `确定要删除"${sessionTitle}"吗？删除后无法恢复。`,
+      '确认删除',
+      {
+        confirmButtonText: '确定删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+        dangerouslyUseHTMLString: false
+      }
+    )
+    
+    // 用户确认删除
     await chatApi.deleteSession(sessionId)
+    ElMessage.success('删除成功')
     await loadSessions()
     if (currentSessionId.value === sessionId) {
       currentSessionId.value = null
       messages.value = []
+      currentSession.value = null
     }
   } catch (error) {
-    ElMessage.error('删除对话失败')
+    // 用户取消删除或删除失败
+    if (error !== 'cancel') {
+      ElMessage.error('删除对话失败：' + (error.response?.data?.detail || error.message || '未知错误'))
+    }
   }
 }
 
@@ -780,6 +852,8 @@ const sendMessage = async () => {
         }
       }
       
+      // 如果标题被自动更新，重新加载会话列表以显示新标题
+      await loadSessions()
       await loadMessages(currentSessionId.value)
       
       // 将推荐问题和复杂SQL标记保存到对应的AI回复消息中
@@ -1074,6 +1148,23 @@ const generateInterfaceFromMessage = async (message) => {
       return
     }
     
+    // 获取会话标题作为默认路径
+    let defaultPath = `/query-${message.id}`
+    if (currentSession.value && currentSession.value.title) {
+      // 使用会话标题生成路径（清理特殊字符，转换为URL友好格式）
+      const sessionTitle = currentSession.value.title
+        .replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '-')  // 替换特殊字符为连字符
+        .replace(/-+/g, '-')  // 合并多个连字符
+        .replace(/^-|-$/g, '')  // 移除首尾连字符
+        .toLowerCase()
+      
+      if (sessionTitle && sessionTitle.length > 0) {
+        // 限制长度，避免路径过长
+        const maxLength = 30
+        defaultPath = `/${sessionTitle.length > maxLength ? sessionTitle.substring(0, maxLength) : sessionTitle}`
+      }
+    }
+    
     // 显示接口路径输入对话框（只输入/api/query之后的路径）
     const { value: proxyPath } = await ElMessageBox.prompt(
       '请输入接口路径（固定前缀：/api/query）',
@@ -1082,7 +1173,7 @@ const generateInterfaceFromMessage = async (message) => {
         confirmButtonText: '生成',
         cancelButtonText: '取消',
         inputPlaceholder: '/school-count',
-        inputValue: `/query-${message.id}`,
+        inputValue: defaultPath,
         inputValidator: (value) => {
           if (!value || !value.trim()) {
             return '接口路径不能为空'

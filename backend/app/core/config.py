@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     API_SERVER_PORT: int = int(os.getenv("API_SERVER_PORT", "8300"))  # API服务端口
     API_SERVER_SCHEME: str = os.getenv("API_SERVER_SCHEME", "http")  # http 或 https
     
+    # Redis配置（用于缓存）
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")  # Redis连接URL
+    REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD", "")  # Redis密码（可选）
+    REDIS_DB: int = int(os.getenv("REDIS_DB", "0"))  # Redis数据库编号（默认0）
+    CACHE_TTL: int = int(os.getenv("CACHE_TTL", "3600"))  # 缓存过期时间（秒，默认1小时）
+    
     @property
     def database_url(self) -> str:
         """生成目标数据库连接URL（用于表转服务）"""

@@ -68,7 +68,7 @@ async def get_full_interface_doc(
     request_sample = {}
     response_sample = {
         "success": True,
-        "message": "执行成功",
+        "message": "success",
         "data": {
             "data": [],
             "count": 0,
@@ -784,7 +784,7 @@ async def export_openapi(
                                     "type": "object",
                                     "properties": {
                                         "success": {"type": "boolean", "example": True},
-                                        "message": {"type": "string", "example": "执行成功"},
+                                        "message": {"type": "string", "example": "success"},
                                         "data": {
                                             "type": "object",
                                             "properties": response_data_properties

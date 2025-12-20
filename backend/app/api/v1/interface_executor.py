@@ -91,20 +91,68 @@ def check_blacklist(interface_config: InterfaceConfig, client_ip: str) -> bool:
     return True
 
 
-def audit_log(interface_config: InterfaceConfig, client_ip: str, user_id: Optional[int], action: str, details: Dict[str, Any]):
-    """记录审计日志"""
+def audit_log(
+    db: Session,
+    interface_config: InterfaceConfig,
+    client_ip: str,
+    user_id: Optional[int],
+    action: str,
+    details: Dict[str, Any],
+    sql_statement: Optional[str] = None,
+    execution_time: Optional[float] = None,
+    row_count: Optional[int] = None,
+    success: bool = True,
+    error_message: Optional[str] = None
+):
+    """
+    记录审计日志到数据库
+    
+    Args:
+        db: 数据库会话
+        interface_config: 接口配置
+        client_ip: 客户端IP
+        user_id: 用户ID
+        action: 操作类型
+        details: 操作详情
+        sql_statement: SQL语句（可选）
+        execution_time: 执行时间（秒，可选）
+        row_count: 返回行数（可选）
+        success: 是否成功
+        error_message: 错误信息（可选）
+    """
     if not interface_config.enable_audit_log:
         return
     
-    logger.info(
-        f"审计日志 - 接口ID: {interface_config.id}, "
-        f"接口名称: {interface_config.interface_name}, "
-        f"客户端IP: {client_ip}, "
-        f"用户ID: {user_id}, "
-        f"操作: {action}, "
-        f"详情: {details}"
-    )
-    # TODO: 实际应该写入专门的审计日志表
+    try:
+        from app.models import AuditLog
+        import json
+        
+        # 创建审计日志记录
+        audit_record = AuditLog(
+            interface_id=interface_config.id,
+            user_id=user_id,
+            client_ip=client_ip,
+            action=action,
+            resource_type="interface",
+            resource_id=interface_config.id,
+            details=json.dumps(details, ensure_ascii=False, default=str),
+            sql_statement=sql_statement[:1000] if sql_statement else None,  # 限制长度
+            execution_time=execution_time,
+            row_count=row_count,
+            success=success,
+            error_message=error_message[:500] if error_message else None  # 限制长度
+        )
+        db.add(audit_record)
+        db.commit()
+        
+        logger.info(
+            f"审计日志已记录 - 接口ID: {interface_config.id}, "
+            f"操作: {action}, 用户ID: {user_id}, IP: {client_ip}"
+        )
+    except Exception as e:
+        # 审计日志记录失败不应影响主流程
+        logger.error(f"记录审计日志失败: {e}", exc_info=True)
+        db.rollback()
 
 
 def get_client_ip(request: Request) -> str:
@@ -266,12 +314,8 @@ def execute_interface_sql(
                         else:
                             sql = f"{sql} {limit_clause}"
             
-            # 记录审计日志（执行前）
-            if client_ip:
-                audit_log(interface_config, client_ip, user_id, "execute_sql", {
-                    "sql_preview": sql[:200] if sql else None,
-                    "params": params
-                })
+            # 记录执行开始时间
+            start_time = time.time()
             
             # 执行查询
             # 检查SQL中是否还有未替换的占位符（:param格式）
@@ -378,12 +422,58 @@ def execute_interface_sql(
             if interface_config.return_total_count:
                 result["total"] = total_count
             
+            # 记录审计日志（执行成功）
+            execution_time = time.time() - start_time
+            row_count = len(data)
+            if client_ip:
+                audit_log(
+                    db=db,
+                    interface_config=interface_config,
+                    client_ip=client_ip,
+                    user_id=user_id,
+                    action="execute_sql",
+                    details={
+                        "sql_preview": sql[:200] if sql else None,
+                        "params": params,
+                        "page": page,
+                        "page_size": page_size
+                    },
+                    sql_statement=sql[:1000] if sql else None,
+                    execution_time=execution_time,
+                    row_count=row_count,
+                    success=True
+                )
+            
             return result
         finally:
             db.close()
             engine.dispose()
     except Exception as e:
         logger.error("执行接口SQL失败: {}", e, exc_info=True)
+        
+        # 记录审计日志（执行失败）
+        if client_ip and interface_config:
+            try:
+                execution_time = time.time() - start_time if 'start_time' in locals() else None
+                audit_log(
+                    db=db if 'db' in locals() else None,
+                    interface_config=interface_config,
+                    client_ip=client_ip,
+                    user_id=user_id,
+                    action="execute_sql",
+                    details={
+                        "error": str(e),
+                        "params": params if 'params' in locals() else {}
+                    },
+                    sql_statement=sql[:1000] if 'sql' in locals() and sql else None,
+                    execution_time=execution_time,
+                    row_count=0,
+                    success=False,
+                    error_message=str(e)[:500]
+                )
+            except Exception as log_error:
+                logger.error(f"记录失败审计日志时出错: {log_error}")
+        
         raise
 
 

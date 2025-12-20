@@ -1,6 +1,7 @@
 """
 SQL生成服务
 调用LLM生成SQL，并进行验证和优化
+支持缓存机制以提升性能
 """
 import re
 from typing import Dict, Any, Optional, List
@@ -9,6 +10,7 @@ from loguru import logger
 from app.core.llm.base import BaseLLMClient
 from app.core.rag.prompt_builder import PromptBuilder
 from app.core.rag.schema_loader import SchemaLoader
+from app.core.cache import get_cache_service
 from app.models import DatabaseConfig
 
 
@@ -26,7 +28,9 @@ class SQLGenerator:
         self,
         llm_client: BaseLLMClient,
         prompt_builder: PromptBuilder,
-        schema_loader: Optional[SchemaLoader] = None
+        schema_loader: Optional[SchemaLoader] = None,
+        enable_cache: bool = True,
+        cache_ttl: int = 3600
     ):
         """
         初始化SQL生成器
@@ -35,11 +39,15 @@ class SQLGenerator:
             llm_client: LLM客户端
             prompt_builder: 提示词构建器
             schema_loader: Schema加载器（可选）
+            enable_cache: 是否启用缓存（默认True）
+            cache_ttl: 缓存过期时间（秒，默认1小时）
         """
         self.llm_client = llm_client
         self.prompt_builder = prompt_builder
         self.schema_loader = schema_loader
-        self.schema_loader = schema_loader
+        self.enable_cache = enable_cache
+        self.cache_ttl = cache_ttl
+        self.cache_service = get_cache_service() if enable_cache else None
     
     async def generate_sql(
         self,
@@ -65,6 +73,20 @@ class SQLGenerator:
                 "tokens_used": token使用量
             }
         """
+        # 检查缓存（如果启用）
+        if self.enable_cache and self.cache_service:
+            cache_key = self.cache_service._generate_key(
+                "sql_generation",
+                question=question,
+                db_config_id=db_config.id,
+                db_type=db_config.db_type or "mysql",
+                context_hash=hash(str(context)) if context else None
+            )
+            cached_result = self.cache_service.get(cache_key)
+            if cached_result:
+                logger.info(f"从缓存获取SQL生成结果: {question[:50]}...")
+                return cached_result
+        
         retries = 0
         last_error = None
         
@@ -118,13 +140,27 @@ class SQLGenerator:
                 tokens_used = response.get("tokens_used", 0) if isinstance(response, dict) else 0
                 model = response.get("model", self.llm_client.model_name) if isinstance(response, dict) else self.llm_client.model_name
                 
-                return {
+                result = {
                     "sql": sql,
                     "explanation": self._generate_explanation(question, sql),
                     "chart_type": chart_type,
                     "tokens_used": tokens_used,
                     "model": model
                 }
+                
+                # 保存到缓存（如果启用）
+                if self.enable_cache and self.cache_service:
+                    cache_key = self.cache_service._generate_key(
+                        "sql_generation",
+                        question=question,
+                        db_config_id=db_config.id,
+                        db_type=db_config.db_type or "mysql",
+                        context_hash=hash(str(context)) if context else None
+                    )
+                    self.cache_service.set(cache_key, result, ttl=self.cache_ttl)
+                    logger.info(f"SQL生成结果已缓存: {question[:50]}...")
+                
+                return result
                 
             except Exception as e:
                 last_error = e

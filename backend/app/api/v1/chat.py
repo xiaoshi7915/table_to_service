@@ -23,6 +23,74 @@ from app.core.rag_langchain.question_rewriter import QuestionRewriter
 router = APIRouter(prefix="/api/v1/chat", tags=["对话"])
 
 
+async def generate_session_title(
+    session: ChatSession,
+    first_question: str,
+    db: Session,
+    llm_client: Any
+) -> None:
+    """
+    根据对话内容自动生成会话标题
+    
+    Args:
+        session: 会话对象
+        first_question: 第一条用户问题
+        db: 数据库会话
+        llm_client: LLM客户端
+    """
+    try:
+        # 构建生成标题的提示词
+        title_prompt = f"""根据以下用户问题，生成一个简洁、准确的对话标题。
+
+要求：
+1. 标题长度控制在10-20个汉字
+2. 标题要能准确概括问题的核心内容
+3. 使用简洁明了的语言
+4. 不要包含"对话"、"问数"等冗余词汇
+5. 直接返回标题，不要包含其他说明文字
+
+用户问题：{first_question}
+
+标题："""
+        
+        # 调用LLM生成标题
+        messages = [{"role": "user", "content": title_prompt}]
+        response = await llm_client.chat_completion(
+            messages=messages,
+            temperature=0.7,
+            max_tokens=50  # 标题不需要太多token
+        )
+        
+        # 提取标题
+        if isinstance(response, dict):
+            generated_title = response.get("content", "").strip() or response.get("message", {}).get("content", "").strip()
+        else:
+            generated_title = str(response).strip()
+        
+        # 清理标题（移除可能的引号、换行等）
+        generated_title = generated_title.replace('"', '').replace("'", "").replace("\n", "").strip()
+        
+        # 如果标题为空或过长，使用备用标题
+        if not generated_title or len(generated_title) > 50:
+            # 从问题中提取关键词作为标题
+            if len(first_question) <= 20:
+                generated_title = first_question
+            else:
+                generated_title = first_question[:20] + "..."
+        
+        # 更新会话标题
+        session.title = generated_title
+        logger.info(f"自动生成对话标题: {generated_title}")
+        
+    except Exception as e:
+        logger.error(f"生成对话标题失败: {e}", exc_info=True)
+        # 生成失败时，使用问题作为标题（截取前20个字符）
+        if len(first_question) <= 20:
+            session.title = first_question
+        else:
+            session.title = first_question[:20] + "..."
+
+
 # 请求模型
 class CreateSessionRequest(BaseModel):
     """创建会话请求"""
@@ -79,9 +147,9 @@ async def create_session(
 ):
     """创建对话会话"""
     try:
-        # 生成默认标题
+        # 生成默认标题（如果未提供，使用时间戳作为临时标题，后续会根据对话内容自动生成）
         if not request.title:
-            request.title = f"对话 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            request.title = f"新对话 {datetime.now().strftime('%m-%d %H:%M')}"
         
         # 验证数据源
         data_source_id = request.data_source_id
@@ -919,6 +987,21 @@ SQL执行失败，错误信息：{execution_error or error}
         
         # 15. 更新会话时间
         session.updated_at = datetime.now()
+        
+        # 16. 如果是第一条消息，自动生成对话标题
+        # 查询会话中的用户消息数量（不包括刚创建的用户消息）
+        user_messages_count = db.query(ChatMessage).filter(
+            ChatMessage.session_id == session_id,
+            ChatMessage.role == "user",
+            ChatMessage.id != user_message.id  # 排除刚创建的用户消息
+        ).count()
+        
+        # 如果这是第一条用户消息（user_messages_count == 0），或者标题是默认标题格式，则生成新标题
+        if user_messages_count == 0 or (session.title and ("新对话" in session.title or session.title.startswith("对话 "))):
+            try:
+                await generate_session_title(session, request.question, db, llm_client)
+            except Exception as e:
+                logger.warning(f"自动生成对话标题失败: {e}，保留原标题")
         
         db.commit()
         db.refresh(assistant_message)

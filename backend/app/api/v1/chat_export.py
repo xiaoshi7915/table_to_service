@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any
+import re
 from loguru import logger
 import io
 import json
@@ -21,6 +22,45 @@ from app.core.security import get_current_active_user
 from app.core.config import settings
 
 router = APIRouter(prefix="/api/v1/chat", tags=["对话导出"])
+
+
+def generate_export_filename(message: ChatMessage, chart_config: Optional[dict], file_extension: str) -> str:
+    """
+    生成导出文件名：使用可视化标题+时间戳
+    
+    Args:
+        message: 消息对象
+        chart_config: 图表配置（可选）
+        file_extension: 文件扩展名（如 .xlsx, .csv, .json, .xml, .png）
+        
+    Returns:
+        文件名（不含路径）
+    """
+    # 获取可视化标题
+    title = None
+    if chart_config and isinstance(chart_config, dict):
+        title = chart_config.get("title")
+    
+    # 如果没有标题，使用备用名称
+    if not title or not title.strip():
+        title = f"数据导出_{message.id}"
+    
+    # 清理标题中的特殊字符（文件名不允许的字符）
+    # 移除或替换文件名不允许的字符
+    title = re.sub(r'[<>:"/\\|?*]', '_', title)
+    title = title.strip()
+    
+    # 限制标题长度（避免文件名过长）
+    if len(title) > 50:
+        title = title[:50]
+    
+    # 生成时间戳
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    # 组合文件名
+    filename = f"{title}_{timestamp}{file_extension}"
+    
+    return filename
 
 
 @router.get("/messages/{message_id}/export")
@@ -98,7 +138,7 @@ async def export_message_data(
         raise HTTPException(status_code=500, detail=f"导出数据失败: {str(e)}")
 
 
-def export_to_excel(data: list, message: ChatMessage):
+def export_to_excel(data: list, message: ChatMessage, chart_config: Optional[dict] = None):
     """
     导出为Excel格式
     
@@ -206,7 +246,7 @@ def export_to_excel(data: list, message: ChatMessage):
             workbook.close()
             output.seek(0)
             
-            filename = f"数据导出_{message.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            filename = generate_export_filename(message, chart_config, ".xlsx")
             # 使用UTF-8编码处理中文文件名
             from urllib.parse import quote
             encoded_filename = quote(filename.encode('utf-8'))
@@ -255,7 +295,7 @@ def export_to_csv(data: list, message: ChatMessage):
         output.seek(0)
         csv_bytes = output.getvalue().encode('utf-8-sig')  # 使用UTF-8 BOM以支持Excel正确显示中文
         
-        filename = f"数据导出_{message.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        filename = generate_export_filename(message, chart_config, ".csv")
         # 使用UTF-8编码处理中文文件名
         from urllib.parse import quote
         encoded_filename = quote(filename.encode('utf-8'))
@@ -302,7 +342,7 @@ def export_to_json(data: list, message: ChatMessage):
         json_str = json.dumps(json_data, ensure_ascii=False, indent=2)
         json_bytes = json_str.encode('utf-8')
         
-        filename = f"数据导出_{message.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        filename = generate_export_filename(message, chart_config, ".json")
         # 使用UTF-8编码处理中文文件名
         from urllib.parse import quote
         encoded_filename = quote(filename.encode('utf-8'))
@@ -363,7 +403,7 @@ def export_to_xml(data: list, message: ChatMessage):
         # 添加XML声明和格式化
         xml_bytes = ('<?xml version="1.0" encoding="UTF-8"?>\n' + xml_str).encode('utf-8')
         
-        filename = f"数据导出_{message.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xml"
+        filename = generate_export_filename(message, chart_config, ".xml")
         # 使用UTF-8编码处理中文文件名
         from urllib.parse import quote
         encoded_filename = quote(filename.encode('utf-8'))
@@ -435,7 +475,7 @@ def export_chart_to_png(chart_config: dict, message: ChatMessage):
                     plt.close()
                     output.seek(0)
                     
-                    filename = f"图表_{message.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                    filename = generate_export_filename(message, chart_config, ".png")
                     # 使用UTF-8编码处理中文文件名
                     from urllib.parse import quote
                     encoded_filename = quote(filename.encode('utf-8'))
@@ -466,7 +506,7 @@ def export_chart_to_png(chart_config: dict, message: ChatMessage):
                     plt.close()
                     output.seek(0)
                     
-                    filename = f"图表_{message.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                    filename = generate_export_filename(message, chart_config, ".png")
                     # 使用UTF-8编码处理中文文件名
                     from urllib.parse import quote
                     encoded_filename = quote(filename.encode('utf-8'))
@@ -497,7 +537,7 @@ def export_chart_to_png(chart_config: dict, message: ChatMessage):
                     plt.close()
                     output.seek(0)
                     
-                    filename = f"图表_{message.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                    filename = generate_export_filename(message, chart_config, ".png")
                     # 使用UTF-8编码处理中文文件名
                     from urllib.parse import quote
                     encoded_filename = quote(filename.encode('utf-8'))
@@ -612,10 +652,15 @@ async def generate_interface_from_message(
         parsed_params = parse_sql_parameters(message.sql_statement)
         request_parameters = parsed_params.get("request_parameters", [])
         
-        # 7. 生成接口名称（基于消息内容或SQL）
+        # 7. 生成接口名称（使用会话标题）
         interface_name = f"问数接口_{message.id}"
-        if message.content:
-            # 使用消息内容的前50个字符作为接口名称
+        if session.title:
+            # 使用会话标题作为接口名称
+            interface_name = session.title
+            if len(interface_name) > 50:
+                interface_name = interface_name[:50] + "..."
+        elif message.content:
+            # 如果没有会话标题，使用消息内容的前50个字符作为接口名称
             interface_name = message.content[:50] + ("..." if len(message.content) > 50 else "")
         
         # 8. 创建接口配置

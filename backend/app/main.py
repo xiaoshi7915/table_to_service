@@ -42,10 +42,53 @@ logger.add(
 # 创建FastAPI应用
 app = FastAPI(
     title="智能问数+服务API",
-    description="将智能问数+库表转换为RESTful API服务",
+    description="""
+    ## 表转接口服务 + 智能问数系统 API文档
+    
+    ### 核心功能
+    
+    #### 1. 数据表转接口服务
+    - 支持多种数据库（MySQL、PostgreSQL、SQLite、SQL Server、Oracle）
+    - 专家模式和图形模式两种配置方式
+    - 自动生成API文档和示例数据
+    - 支持参数化查询、分页、限流等
+    
+    #### 2. 智能问数功能
+    - 自然语言转SQL查询
+    - 自动生成可视化图表
+    - 多轮对话支持
+    - 历史对话管理
+    - 从问数结果生成接口
+    
+    ### 认证方式
+    
+    所有API接口（除登录接口外）都需要JWT Token认证。
+    在请求头中添加：`Authorization: Bearer <your_token>`
+    
+    ### 安全特性
+    
+    - SQL注入防护：所有SQL查询都经过参数化和验证
+    - 权限控制：用户只能访问自己创建的资源
+    - 审计日志：记录所有关键操作
+    - 数据脱敏：敏感数据自动脱敏处理
+    
+    ### 更多文档
+    
+    - [用户手册](../docs/USER_MANUAL.md)
+    - [管理员手册](../docs/ADMIN_MANUAL.md)
+    - [部署文档](../docs/DEPLOYMENT.md)
+    - [SQL注入防护](../docs/SQL_INJECTION_PROTECTION.md)
+    """,
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    contact={
+        "name": "技术支持",
+        "url": "https://github.com/your-repo/table_to_service/issues"
+    },
+    license_info={
+        "name": "MIT License"
+    }
 )
 
 # 配置CORS

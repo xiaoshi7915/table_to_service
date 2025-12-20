@@ -22,7 +22,7 @@ async def get_tables(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_local_db)
 ):
-    """获取数据源的表列表"""
+    """获取数据源的表列表（优化版：只获取表名，不获取详细结构）"""
     try:
         # 验证数据源
         db_config = db.query(DatabaseConfig).filter(
@@ -33,27 +33,44 @@ async def get_tables(
         if not db_config:
             raise HTTPException(status_code=404, detail="数据源不存在")
         
-        # 获取表列表
-        schema_service = SchemaService(db_config)
-        schema_info = schema_service.get_table_schema(
-            table_names=None,
-            include_sample_data=False  # 只获取表列表，不包含样例数据
-        )
+        # 直接获取表名列表，不获取详细结构（提升性能）
+        from app.core.db_factory import DatabaseConnectionFactory
+        from sqlalchemy import inspect, text
         
-        tables = [
-            {
-                "name": table["name"],
-                "column_count": len(table.get("columns", [])),
-                "primary_keys": table.get("primary_keys", [])
-            }
-            for table in schema_info.get("tables", [])
-        ]
+        db_type = db_config.db_type or "mysql"
+        engine = DatabaseConnectionFactory.create_engine(db_config)
         
-        return ResponseModel(
-            success=True,
-            message="获取成功",
-            data=tables  # 直接返回表列表数组，而不是包装在对象中
-        )
+        try:
+            inspector = inspect(engine)
+            
+            # 根据数据库类型获取表名列表
+            if db_type == "sqlite":
+                with engine.connect() as conn:
+                    result = conn.execute(text(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                    ))
+                    table_names = [row[0] for row in result]
+            elif db_type == "postgresql":
+                table_names = inspector.get_table_names(schema='public')
+            else:
+                # MySQL、SQL Server、Oracle等
+                table_names = inspector.get_table_names()
+            
+            # 只返回表名列表（简单格式，提升性能）
+            tables = [{"name": name} for name in sorted(table_names)]
+            
+            engine.dispose()
+            
+            logger.info(f"获取数据源 {datasource_id} 的表列表，共 {len(tables)} 个表")
+            
+            return ResponseModel(
+                success=True,
+                message="获取成功",
+                data=tables
+            )
+        except Exception as e:
+            engine.dispose()
+            raise
         
     except HTTPException:
         raise
