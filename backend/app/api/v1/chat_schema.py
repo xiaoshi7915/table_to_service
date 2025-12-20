@@ -56,8 +56,49 @@ async def get_tables(
                 # MySQL、SQL Server、Oracle等
                 table_names = inspector.get_table_names()
             
-            # 只返回表名列表（简单格式，提升性能）
-            tables = [{"name": name} for name in sorted(table_names)]
+            # 获取表名和描述（如果支持）
+            tables = []
+            for table_name in sorted(table_names):
+                table_info = {"name": table_name, "description": ""}
+                
+                # 尝试获取表注释/描述
+                try:
+                    if db_type == "mysql":
+                        # MySQL: 从INFORMATION_SCHEMA获取表注释
+                        with engine.connect() as conn:
+                            comment_query = text("""
+                                SELECT TABLE_COMMENT 
+                                FROM INFORMATION_SCHEMA.TABLES 
+                                WHERE TABLE_SCHEMA = :db_name 
+                                AND TABLE_NAME = :table_name
+                            """)
+                            result = conn.execute(comment_query, {
+                                "db_name": db_config.database,
+                                "table_name": table_name
+                            })
+                            row = result.fetchone()
+                            if row and row[0]:
+                                table_info["description"] = row[0]
+                    elif db_type == "postgresql":
+                        # PostgreSQL: 从pg_description获取表注释
+                        with engine.connect() as conn:
+                            comment_query = text("""
+                                SELECT obj_description(c.oid, 'pg_class') as table_comment
+                                FROM pg_class c
+                                JOIN pg_namespace n ON c.relnamespace = n.oid
+                                WHERE c.relname = :table_name 
+                                AND n.nspname = 'public'
+                            """)
+                            result = conn.execute(comment_query, {"table_name": table_name})
+                            row = result.fetchone()
+                            if row and row[0]:
+                                table_info["description"] = row[0]
+                    # 其他数据库类型可以在这里添加获取表注释的逻辑
+                except Exception as e:
+                    # 获取注释失败不影响主流程，只记录日志
+                    logger.debug(f"获取表 {table_name} 注释失败: {e}")
+                
+                tables.append(table_info)
             
             engine.dispose()
             

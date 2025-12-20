@@ -113,14 +113,15 @@ async def get_recommended_questions(
         raise HTTPException(status_code=500, detail=f"获取推荐问题失败: {str(e)}")
 
 
-def generate_dynamic_recommendations(
+async def generate_dynamic_recommendations(
     session_id: int,
     current_question: str,
     sql: Optional[str] = None,
     data: Optional[List[Dict[str, Any]]] = None,
     db: Optional[Session] = None,
     current_user: Optional[User] = None,
-    selected_tables: Optional[List[str]] = None
+    selected_tables: Optional[List[str]] = None,
+    llm_client: Optional[Any] = None
 ) -> List[str]:
     """
     基于会话上下文动态生成推荐问题
@@ -244,35 +245,96 @@ def generate_dynamic_recommendations(
                     if len(recommendations) >= 3:
                         break
         
-        # 4. 使用LLM生成推荐问题（可选，如果配置了AI模型）
-        if len(recommendations) < 3 and db:
+        # 4. 优先使用LLM生成推荐问题（如果提供了LLM客户端）
+        if llm_client and sql:
             try:
-                model_config = db.query(AIModelConfig).filter(
-                    AIModelConfig.is_default == True,
-                    AIModelConfig.is_active == True
-                ).first()
+                # 获取会话历史消息（用于上下文）
+                session_history = []
+                if db and session_id:
+                    recent_messages = db.query(ChatMessage).filter(
+                        ChatMessage.session_id == session_id
+                    ).order_by(ChatMessage.created_at.desc()).limit(5).all()
+                    
+                    for msg in reversed(recent_messages):  # 按时间正序
+                        if msg.role == "user":
+                            session_history.append(f"用户：{msg.content}")
+                        elif msg.role == "assistant" and msg.content:
+                            session_history.append(f"助手：{msg.content[:200]}")  # 只取前200字
                 
-                if model_config and sql and data:
-                    llm_client = LLMFactory.create_client(model_config)
+                # 构建数据摘要
+                data_summary = ""
+                if data and len(data) > 0:
+                    columns = list(data[0].keys()) if data else []
+                    data_summary = f"查询结果：共{len(data)}条数据，包含列：{', '.join(columns[:8])}"
+                    if len(columns) > 8:
+                        data_summary += f"等{len(columns)}个字段"
+                else:
+                    data_summary = "查询结果：无数据"
+                
+                # 构建表信息
+                table_info = ""
+                if selected_tables and len(selected_tables) > 0:
+                    table_info = f"当前会话涉及的表：{', '.join(selected_tables[:5])}"
+                elif db_config:
+                    table_info = f"数据源：{db_config.name}"
+                
+                # 构建提示词
+                prompt = f"""你是一个智能数据分析助手。基于以下对话上下文，生成3个相关的、个性化的推荐问题。
+
+对话上下文：
+{chr(10).join(session_history) if session_history else '这是对话的开始'}
+
+当前用户问题：{current_question}
+执行的SQL：{sql[:300]}
+{table_info}
+{data_summary}
+
+请生成3个推荐问题，要求：
+1. **问题要具体、可执行**，基于当前数据源和表结构
+2. **角度要多样化**：可以是更深入的分析、不同维度的统计、时间趋势、对比分析等
+3. **避免重复**：不要生成"数据概览"、"汇总信息"等通用问题
+4. **基于上下文**：结合当前问题和查询结果，生成有意义的后续问题
+5. **语言自然**：使用自然的中文表达，不要过于技术化
+
+只返回3个问题，每行一个问题，不要编号，不要添加任何前缀或说明文字："""
+                
+                # 调用LLM生成推荐问题
+                messages = [{"role": "user", "content": prompt}]
+                response = await llm_client.chat_completion(
+                    messages=messages,
+                    temperature=0.8,  # 稍高的温度以获得更多样化的问题
+                    max_tokens=300
+                )
+                
+                # 解析LLM返回的问题
+                if isinstance(response, dict):
+                    llm_content = response.get("content", "").strip() or response.get("message", {}).get("content", "").strip()
+                else:
+                    llm_content = str(response).strip()
+                
+                if llm_content:
+                    # 按行分割，提取问题
+                    llm_questions = []
+                    for line in llm_content.split('\n'):
+                        line = line.strip()
+                        # 移除可能的编号（如"1. "、"1、"等）
+                        line = line.lstrip('0123456789.、）)').strip()
+                        # 移除可能的标记（如"- "、"• "等）
+                        line = line.lstrip('- •*').strip()
+                        if line and len(line) > 5 and len(line) < 100:  # 过滤太短或太长的问题
+                            # 过滤掉明显的通用问题
+                            if not any(keyword in line for keyword in ["数据概览", "汇总信息", "查看所有", "查询全部"]):
+                                llm_questions.append(line)
                     
-                    # 构建提示词
-                    prompt = f"""基于以下对话上下文，生成3个相关的推荐问题。
-
-当前问题：{current_question}
-生成的SQL：{sql[:200]}...
-查询结果：共{len(data)}条数据，列名：{', '.join(list(data[0].keys())[:5]) if data else '无'}
-
-请生成3个与当前问题相关、但角度不同的推荐问题，要求：
-1. 问题要具体、可执行
-2. 基于当前SQL和数据特征
-3. 可以是更深入的分析、不同维度的统计、或相关的查询
-
-只返回问题列表，每行一个问题，不要编号："""
+                    if len(llm_questions) > 0:
+                        # 使用LLM生成的问题，替换规则生成的问题
+                        recommendations = llm_questions[:3]
+                        logger.info(f"使用LLM生成推荐问题成功，共{len(recommendations)}个")
+                    else:
+                        logger.warning("LLM返回的问题格式不正确，使用规则生成")
+                else:
+                    logger.warning("LLM返回内容为空，使用规则生成")
                     
-                    # 注意：chat_completion是异步方法，这里暂时跳过LLM生成
-                    # 如果需要LLM生成，可以在调用方使用async/await，或者创建异步版本的函数
-                    # 暂时使用规则生成，LLM生成功能可以在后续版本中实现
-                    pass
             except Exception as e:
                 logger.warning(f"使用LLM生成推荐问题失败: {e}，将使用规则生成")
         

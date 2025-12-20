@@ -2,6 +2,8 @@
 RAG工作流
 使用LangGraph实现多步骤RAG流程，包含错误重试机制
 """
+import json
+import re
 from typing import TypedDict, List, Dict, Any, Optional, Annotated
 from langgraph.graph import StateGraph, END
 try:
@@ -22,6 +24,26 @@ from app.models import DatabaseConfig
 from .schema_service import SchemaService
 # 延迟导入rag_chain，避免循环依赖
 # from .rag_chain import SQLRAGChain
+
+# #region agent log
+DEBUG_LOG_PATH = "/opt/table_to_service/.cursor/debug.log"
+def _debug_log(location, message, data, hypothesis_id=None):
+    try:
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            import time
+            log_entry = {
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": hypothesis_id,
+                "location": location,
+                "message": message,
+                "data": data,
+                "timestamp": int(time.time() * 1000)
+            }
+            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+# #endregion
 
 
 class RAGState(TypedDict):
@@ -254,20 +276,67 @@ class RAGWorkflow:
             try:
                 if hasattr(self.llm, 'invoke'):
                     response = self.llm.invoke(prompt)
-                    sql = response.content if hasattr(response, 'content') else str(response)
+                    sql_raw = response.content if hasattr(response, 'content') else str(response)
                 elif hasattr(self.llm, '_generate'):
                     # 使用_generate方法
                     result = self.llm._generate([prompt])
                     if result.generations and result.generations[0]:
-                        sql = result.generations[0][0].text
+                        sql_raw = result.generations[0][0].text
                     else:
-                        sql = ""
+                        sql_raw = ""
                 else:
                     # 降级方案：尝试直接调用
-                    sql = str(self.llm(prompt))
+                    sql_raw = str(self.llm(prompt))
+                
+                # #region agent log
+                _debug_log(
+                    "rag_workflow.py:257",
+                    "LLM原始响应",
+                    {
+                        "sql_raw_length": len(sql_raw),
+                        "sql_raw_preview": sql_raw[:500],
+                        "has_with": "WITH" in sql_raw.upper(),
+                        "has_paren_start": sql_raw.strip().startswith("("),
+                        "select_count": sql_raw.upper().count("SELECT")
+                    },
+                    "D"
+                )
+                # #endregion
                 
                 # 提取SQL（移除可能的Markdown格式）
-                sql = self._extract_sql(sql)
+                sql = self._extract_sql(sql_raw)
+                
+                # #region agent log
+                _debug_log(
+                    "rag_workflow.py:270",
+                    "提取后的SQL",
+                    {
+                        "sql_length": len(sql),
+                        "sql_preview": sql[:300],
+                        "has_with": "WITH" in sql.upper(),
+                        "starts_with_paren": sql.strip().startswith("("),
+                        "select_count": sql.upper().count("SELECT")
+                    },
+                    "A"
+                )
+                # #endregion
+                
+                # 修复缺少WITH关键字的CTE
+                sql = self._fix_cte_sql(sql)
+                
+                # #region agent log
+                _debug_log(
+                    "rag_workflow.py:286",
+                    "修复后的SQL",
+                    {
+                        "sql_length": len(sql),
+                        "sql_preview": sql[:300],
+                        "has_with_after": "WITH" in sql.upper(),
+                        "changed": sql != self._extract_sql(sql_raw)
+                    },
+                    "B"
+                )
+                # #endregion
                 
                 # 检查SQL是否包含不允许的语句（CREATE、DROP等）
                 sql_upper = sql.upper().strip()
@@ -521,10 +590,36 @@ class RAGWorkflow:
     
     def _extract_sql(self, text: str) -> str:
         """从文本中提取SQL"""
-        import re
-
-        # 移除Markdown代码块
+        # #region agent log
+        _debug_log(
+            "rag_workflow.py:_extract_sql",
+            "开始提取SQL",
+            {
+                "text_length": len(text),
+                "text_preview": text[:300],
+                "has_code_block": "```" in text,
+                "has_with": "WITH" in text.upper()
+            },
+            "A"
+        )
+        # #endregion
+        
+        # 移除Markdown代码块（保留内容）
+        original_text = text
         text = re.sub(r'```(?:sql)?\s*\n?(.*?)\n?```', r'\1', text, flags=re.DOTALL)
+        
+        # #region agent log
+        _debug_log(
+            "rag_workflow.py:_extract_sql",
+            "移除Markdown后",
+            {
+                "text_length": len(text),
+                "text_preview": text[:300],
+                "has_with": "WITH" in text.upper()
+            },
+            "A"
+        )
+        # #endregion
 
         # 检查是否包含CREATE等语句
         text_upper = text.upper()
@@ -536,23 +631,223 @@ class RAGWorkflow:
             create_match = re.search(r'(CREATE\s+.*?)(?:;|$)', text, re.DOTALL | re.IGNORECASE)
             if create_match:
                 sql_parts.append(create_match.group(1).strip())
-            # 提取SELECT语句
-            select_match = re.search(r'(SELECT\s+.*?)(?:;|$)', text, re.DOTALL | re.IGNORECASE)
-            if select_match:
-                sql_parts.append(select_match.group(1).strip())
+            # 提取WITH CTE语句（优先）
+            with_match = re.search(r'(WITH\s+\w+\s+AS\s*\([^)]+\)\s+SELECT\s+.*?)(?:;|$)', text, re.DOTALL | re.IGNORECASE)
+            if with_match:
+                sql_parts.append(with_match.group(1).strip())
+            else:
+                # 提取SELECT语句
+                select_match = re.search(r'(SELECT\s+.*?)(?:;|$)', text, re.DOTALL | re.IGNORECASE)
+                if select_match:
+                    sql_parts.append(select_match.group(1).strip())
             
             if sql_parts:
                 return "\n\n".join(sql_parts)
             # 如果没有找到，返回原始文本
             return ' '.join(text.split()).strip()
 
-        # 提取SELECT语句（正常情况）
-        match = re.search(r'(SELECT\s+.*?)(?:;|$)', text, re.DOTALL | re.IGNORECASE)
-        if match:
-            return match.group(1).strip()
+        # **关键修复**：优先提取WITH CTE语句（使用更精确的正则，支持多行和嵌套括号）
+        # 匹配模式：WITH 表名 AS ( ... ) SELECT ...
+        # 使用递归或平衡括号匹配
+        with_pattern = r'(WITH\s+\w+\s+AS\s*\((?:[^()]|\([^()]*\))*\)\s+SELECT\s+.*?)(?:;|$)'
+        with_match = re.search(with_pattern, text, re.DOTALL | re.IGNORECASE)
+        if with_match:
+            extracted = with_match.group(1).strip()
+            # #region agent log
+            _debug_log(
+                "rag_workflow.py:_extract_sql",
+                "匹配到WITH CTE",
+                {
+                    "extracted_length": len(extracted),
+                    "extracted_preview": extracted[:300]
+                },
+                "A"
+            )
+            # #endregion
+            return extracted
+        
+        # 如果上面的正则没匹配到（可能括号嵌套复杂），尝试手动解析
+        if "WITH" in text_upper and "AS" in text_upper:
+            # 查找WITH关键字的位置
+            with_pos = text_upper.find("WITH")
+            if with_pos >= 0:
+                # 从WITH开始提取，直到遇到分号或文本结束
+                # 找到最后一个SELECT后的内容
+                remaining = text[with_pos:]
+                # 查找分号位置
+                semicolon_pos = remaining.find(';')
+                if semicolon_pos > 0:
+                    extracted = remaining[:semicolon_pos].strip()
+                else:
+                    extracted = remaining.strip()
+                
+                # #region agent log
+                _debug_log(
+                    "rag_workflow.py:_extract_sql",
+                    "手动提取WITH CTE",
+                    {
+                        "extracted_length": len(extracted),
+                        "extracted_preview": extracted[:300]
+                    },
+                    "A"
+                )
+                # #endregion
+                
+                if extracted and "WITH" in extracted.upper():
+                    return extracted
+        
+        # 提取SELECT语句（正常情况）- 但可能不完整（如果包含CTE）
+        # 尝试匹配以括号开头的SELECT（可能是CTE的一部分）
+        if text.strip().startswith('('):
+            # 可能是CTE格式，尝试提取完整内容直到遇到分号或结尾
+            # 查找从第一个SELECT到最后一个SELECT的完整内容
+            select_pattern = r'((?:\([^)]*\)|SELECT[^;]*)+)(?:;|$)'
+            match = re.search(select_pattern, text, re.DOTALL | re.IGNORECASE)
+            if match:
+                extracted = match.group(1).strip()
+                # 检查是否包含两个SELECT（CTE模式）
+                if extracted.upper().count('SELECT') >= 2:
+                    return extracted
+        else:
+            # 普通SELECT提取（使用贪婪匹配，确保获取完整语句）
+            # 注意：这里使用贪婪匹配可能有问题，但如果没有WITH，应该只有一个SELECT
+            match = re.search(r'(SELECT\s+.*?)(?:;|$)', text, re.DOTALL | re.IGNORECASE)
+            if match:
+                extracted = match.group(1).strip()
+                # #region agent log
+                _debug_log(
+                    "rag_workflow.py:_extract_sql",
+                    "提取普通SELECT（可能不完整）",
+                    {
+                        "extracted_length": len(extracted),
+                        "extracted_preview": extracted[:300],
+                        "select_count": extracted.upper().count("SELECT")
+                    },
+                    "A"
+                )
+                # #endregion
+                return extracted
 
         # 清理空白
-        return ' '.join(text.split()).strip()
+        result = ' '.join(text.split()).strip()
+        # #region agent log
+        _debug_log(
+            "rag_workflow.py:_extract_sql",
+            "最终提取结果",
+            {
+                "result_length": len(result),
+                "result_preview": result[:300]
+            },
+            "A"
+        )
+        # #endregion
+        return result
+    
+    def _fix_cte_sql(self, sql: str) -> str:
+        """修复缺少WITH关键字的CTE SQL"""
+        if not sql:
+            return sql
+        
+        sql_upper = sql.upper().strip()
+        
+        # 如果已经有WITH关键字，直接返回
+        if sql_upper.startswith('WITH'):
+            return sql
+        
+        # #region agent log
+        _debug_log(
+            "rag_workflow.py:_fix_cte_sql",
+            "开始修复CTE",
+            {
+                "sql_starts_with_paren": sql.strip().startswith("("),
+                "sql_length": len(sql),
+                "sql_preview": sql[:200]
+            },
+            "B"
+        )
+        # #endregion
+        
+        # 检测模式：以括号包围的SELECT开头，后面跟着另一个SELECT
+        if sql.strip().startswith('('):
+            # 手动解析括号
+            paren_count = 0
+            cte_end = -1
+            for i, char in enumerate(sql):
+                if char == '(':
+                    paren_count += 1
+                elif char == ')':
+                    paren_count -= 1
+                    if paren_count == 0:
+                        cte_end = i + 1
+                        break
+            
+            # #region agent log
+            _debug_log(
+                "rag_workflow.py:_fix_cte_sql",
+                "括号解析结果",
+                {
+                    "cte_end": cte_end,
+                    "paren_count": paren_count
+                },
+                "E"
+            )
+            # #endregion
+            
+            if cte_end > 0:
+                # 检查后面是否跟着SELECT
+                remaining = sql[cte_end:].strip()
+                # #region agent log
+                _debug_log(
+                    "rag_workflow.py:_fix_cte_sql",
+                    "检查剩余部分",
+                    {
+                        "remaining_preview": remaining[:200],
+                        "starts_with_select": remaining.upper().startswith("SELECT")
+                    },
+                    "E"
+                )
+                # #endregion
+                
+                if remaining.upper().startswith('SELECT'):
+                    # 提取CTE部分
+                    cte_query = sql[1:cte_end-1].strip()  # 移除外层括号
+                    
+                    # 从主查询中提取CTE名称
+                    from_match = re.search(r'FROM\s+(\w+)', remaining, re.IGNORECASE)
+                    # #region agent log
+                    _debug_log(
+                        "rag_workflow.py:_fix_cte_sql",
+                        "FROM匹配结果",
+                        {
+                            "from_match_found": from_match is not None,
+                            "cte_name": from_match.group(1) if from_match else None
+                        },
+                        "E"
+                    )
+                    # #endregion
+                    
+                    if from_match:
+                        cte_name = from_match.group(1)
+                        
+                        # 重构SQL，添加WITH关键字
+                        fixed_sql = f"WITH {cte_name} AS (\n    {cte_query}\n)\n{remaining}"
+                        logger.info(f"检测到缺少WITH关键字的CTE，已自动修复: {cte_name}")
+                        
+                        # #region agent log
+                        _debug_log(
+                            "rag_workflow.py:_fix_cte_sql",
+                            "CTE修复成功",
+                            {
+                                "cte_name": cte_name,
+                                "fixed_sql_preview": fixed_sql[:300]
+                            },
+                            "E"
+                        )
+                        # #endregion
+                        
+                        return fixed_sql
+        
+        return sql
     
     def _recommend_chart(self, question: str, data: List[Dict]) -> Dict[str, Any]:
         """推荐图表类型"""

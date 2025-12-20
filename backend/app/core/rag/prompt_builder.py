@@ -96,6 +96,11 @@ class PromptBuilder:
 4. 合理使用GROUP BY、ORDER BY、LIMIT等子句
 5. 生成的SQL要符合{db_type.upper()}语法规范
 6. 如果问题中提到了业务术语，请使用对应的数据库字段名
+7. **重要：如果需要使用子查询或临时结果集，必须使用CTE（Common Table Expression）语法，即使用WITH关键字**
+   - 格式：WITH 临时表名 AS (SELECT ...) SELECT ... FROM 临时表名
+   - 示例：WITH school_stats AS (SELECT province_name, COUNT(*) AS count FROM schools_list GROUP BY province_name) SELECT * FROM school_stats WHERE count > 10
+   - 如果查询需要先计算中间结果再基于该结果进行筛选或计算，必须使用WITH语句定义中间结果集
+   - 不要生成只有括号包围的SELECT语句而不带WITH关键字
 
 请直接返回SQL语句，不要包含其他解释："""
             

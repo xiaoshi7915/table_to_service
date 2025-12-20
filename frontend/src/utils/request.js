@@ -66,6 +66,9 @@ request.interceptors.response.use(
         window.location.href = '/login'
       }
       // 如果是登录接口返回401，不处理，让登录页面显示错误
+    } else if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+      // 超时错误处理
+      ElMessage.error('请求超时，请稍后重试。如果问题持续，请检查网络连接或联系管理员')
     } else if (error.response?.data?.detail) {
       ElMessage.error(error.response.data.detail)
     } else if (!error.response) {

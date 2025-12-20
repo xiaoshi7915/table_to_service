@@ -70,9 +70,23 @@
               type="success"
               size="small"
               style="margin-right: 4px"
+              :title="getTableDescription(table)"
             >
               {{ table }}
+              <span v-if="getTableDescription(table)" class="table-description">
+                ({{ getTableDescription(table) }})
+              </span>
             </el-tag>
+            <el-button
+              type="primary"
+              size="small"
+              text
+              @click="showEditTablesDialog"
+              style="margin-left: 8px"
+            >
+              <el-icon><Edit /></el-icon>
+              编辑表
+            </el-button>
           </div>
         </div>
         
@@ -277,9 +291,9 @@
                 </el-table>
               </div>
               
-              <!-- 解释说明 -->
-              <div v-if="message.explanation" class="explanation-section">
-                {{ message.explanation }}
+              <!-- 解释说明（包含LLM生成的数据分析总结） -->
+              <div v-if="message.explanation || (message.content && message.role === 'assistant')" class="explanation-section">
+                <div v-html="formatExplanation(message.explanation || message.content)"></div>
               </div>
               
               <!-- 推荐问题（显示在AI回复下方，基于当前会话上下文） -->
@@ -386,9 +400,15 @@
               <el-option
                 v-for="table in tables"
                 :key="table.name || table"
-                :label="table.name || table"
                 :value="table.name || table"
-              />
+              >
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                  <span>{{ table.name || table }}</span>
+                  <span v-if="table.description" style="color: #f56c6c; font-size: 12px; margin-left: 8px;">
+                    {{ table.description }}
+                  </span>
+                </div>
+              </el-option>
             </el-select>
             <div v-if="loadingTables" style="margin-top: 8px; color: #909399; font-size: 12px">
               正在加载表列表...
@@ -484,6 +504,67 @@
         </el-button>
       </template>
     </el-dialog>
+    
+    <!-- 编辑表对话框 -->
+    <el-dialog
+      v-model="editTablesDialogVisible"
+      title="编辑选择的表"
+      width="600px"
+      @close="resetEditTablesForm"
+    >
+      <el-form :model="editTablesForm" label-width="100px">
+        <el-form-item label="数据源">
+          <el-select
+            v-model="editTablesForm.data_source_id"
+            placeholder="请选择数据源"
+            style="width: 100%"
+            disabled
+          >
+            <el-option
+              v-for="ds in dataSources"
+              :key="ds.id"
+              :label="ds.name"
+              :value="ds.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="选择表" required>
+          <el-select
+            v-model="editTablesForm.selected_tables"
+            placeholder="请选择表（可多选）"
+            multiple
+            style="width: 100%"
+            :disabled="loadingEditTables"
+          >
+            <el-option
+              v-for="table in editTablesList"
+              :key="table.name || table"
+              :value="table.name || table"
+            >
+              <div style="display: flex; align-items: center; justify-content: space-between;">
+                <span>{{ table.name || table }}</span>
+                <span v-if="table.description" style="color: #f56c6c; font-size: 12px; margin-left: 8px;">
+                  {{ table.description }}
+                </span>
+              </div>
+            </el-option>
+          </el-select>
+          <div v-if="loadingEditTables" style="margin-top: 8px; color: #909399; font-size: 12px">
+            正在加载表列表...
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editTablesDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          @click="confirmEditTables"
+          :disabled="!editTablesForm.selected_tables || editTablesForm.selected_tables.length === 0"
+        >
+          确定
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -514,6 +595,16 @@ const createSessionForm = ref({
 const dataSources = ref([])
 const tables = ref([])
 const loadingTables = ref(false)
+const tableDescriptions = ref({}) // 存储表名和描述的映射
+
+// 编辑表相关
+const editTablesDialogVisible = ref(false)
+const editTablesForm = ref({
+  data_source_id: null,
+  selected_tables: []
+})
+const editTablesList = ref([])
+const loadingEditTables = ref(false)
 
 // 导出数据相关
 const exportDialogVisible = ref(false)
@@ -540,6 +631,7 @@ const editSQLForm = ref({
   messageId: null
 })
 const retryingSQL = ref(false)
+
 
 // 加载对话列表
 const loadSessions = async () => {
@@ -636,21 +728,39 @@ const handleDataSourceChange = async () => {
       url: `/api/v1/chat/datasources/${createSessionForm.value.data_source_id}/tables`,
       method: 'get'
     })
-    if (response.code === 200 || response.success) {
-      // 处理响应数据格式：后端返回 {tables: [...], total: ...}
-      const responseData = response.data || {}
-      if (responseData.tables && Array.isArray(responseData.tables)) {
-        tables.value = responseData.tables
-      } else if (Array.isArray(responseData)) {
-        tables.value = responseData
+      if (response.code === 200 || response.success) {
+        // 处理响应数据格式：后端返回 {tables: [...], total: ...}
+        const responseData = response.data || {}
+        let tableList = []
+        if (responseData.tables && Array.isArray(responseData.tables)) {
+          tableList = responseData.tables
+        } else if (Array.isArray(responseData)) {
+          tableList = responseData
+        } else {
+          tableList = []
+        }
+        
+        // 处理表列表，保留表名和描述的对象结构（与编辑表对话框保持一致）
+        tables.value = tableList.map(item => {
+          if (typeof item === 'string') {
+            return { name: item, description: '' }
+          } else {
+            const tableName = item.name || item
+            const description = item.description || ''
+            
+            // 存储表描述到映射中（用于其他地方）
+            if (description) {
+              tableDescriptions.value[tableName] = description
+            }
+            
+            return { name: tableName, description: description }
+          }
+        })
+        
+        if (tables.value.length === 0) {
+          ElMessage.warning('该数据源暂无表')
+        }
       } else {
-        tables.value = []
-      }
-      
-      if (tables.value.length === 0) {
-        ElMessage.warning('该数据源暂无表')
-      }
-    } else {
       ElMessage.error('加载表列表失败：' + (response.message || '未知错误'))
       tables.value = []
     }
@@ -671,10 +781,15 @@ const confirmCreateSession = async () => {
   }
   
   try {
+    // 提取表名（如果tables是对象数组，需要提取name字段）
+    const selectedTableNames = createSessionForm.value.selected_tables.map(t => 
+      typeof t === 'string' ? t : (t.name || t)
+    )
+    
     // 不传title，让后端自动生成默认标题
     const response = await chatApi.createSession({
       data_source_id: createSessionForm.value.data_source_id,
-      selected_tables: createSessionForm.value.selected_tables
+      selected_tables: selectedTableNames
     })
     
     if (response.code === 200) {
@@ -689,6 +804,24 @@ const confirmCreateSession = async () => {
   }
 }
 
+// 获取表描述
+const getTableDescription = (tableName) => {
+  // 如果当前会话中有表信息，优先使用
+  if (currentSession.value && currentSession.value.table_info) {
+    const tableInfo = currentSession.value.table_info.find(t => t.name === tableName)
+    if (tableInfo && tableInfo.description) {
+      return tableInfo.description
+    }
+  }
+  
+  // 从存储的描述中获取
+  if (tableDescriptions.value[tableName]) {
+    return tableDescriptions.value[tableName]
+  }
+  
+  return ''
+}
+
 // 重置创建会话表单
 const resetCreateSessionForm = () => {
   createSessionForm.value = {
@@ -696,6 +829,125 @@ const resetCreateSessionForm = () => {
     selected_tables: []
   }
   tables.value = []
+  tableDescriptions.value = {}
+}
+
+// 显示编辑表对话框
+const showEditTablesDialog = async () => {
+  if (!currentSession.value || !currentSession.value.data_source_id) {
+    ElMessage.warning('当前会话没有数据源，无法编辑表')
+    return
+  }
+  
+  // 初始化表单
+  editTablesForm.value = {
+    data_source_id: currentSession.value.data_source_id,
+    selected_tables: []
+  }
+  
+  // 获取当前已选择的表
+  if (currentSession.value.selected_tables) {
+    try {
+      const currentTables = typeof currentSession.value.selected_tables === 'string'
+        ? JSON.parse(currentSession.value.selected_tables)
+        : currentSession.value.selected_tables
+      editTablesForm.value.selected_tables = currentTables.map(t => t)
+    } catch (e) {
+      console.error('解析已选表失败:', e)
+    }
+  }
+  
+  // 加载表列表
+  await loadEditTablesList()
+  
+  editTablesDialogVisible.value = true
+}
+
+// 加载编辑表列表
+const loadEditTablesList = async () => {
+  if (!editTablesForm.value.data_source_id) {
+    editTablesList.value = []
+    return
+  }
+  
+  loadingEditTables.value = true
+  try {
+    const response = await request({
+      url: `/api/v1/chat/datasources/${editTablesForm.value.data_source_id}/tables`,
+      method: 'get'
+    })
+    
+    if (response.code === 200 || response.success) {
+      const responseData = response.data || {}
+      let tableList = []
+      if (responseData.tables && Array.isArray(responseData.tables)) {
+        tableList = responseData.tables
+      } else if (Array.isArray(responseData)) {
+        tableList = responseData
+      }
+      
+      // 处理表列表，保留表名和描述的对象结构
+      editTablesList.value = tableList.map(item => {
+        if (typeof item === 'string') {
+          return { name: item, description: '' }
+        } else {
+          const tableName = item.name || item
+          const description = item.description || ''
+          return { name: tableName, description: description }
+        }
+      })
+    } else {
+      ElMessage.error('加载表列表失败：' + (response.message || '未知错误'))
+      editTablesList.value = []
+    }
+  } catch (error) {
+    console.error('加载表列表错误:', error)
+    ElMessage.error('加载表列表失败：' + (error.response?.data?.detail || error.message || '未知错误'))
+    editTablesList.value = []
+  } finally {
+    loadingEditTables.value = false
+  }
+}
+
+// 确认编辑表
+const confirmEditTables = async () => {
+  if (!currentSessionId.value || !editTablesForm.value.selected_tables || editTablesForm.value.selected_tables.length === 0) {
+    ElMessage.warning('请至少选择一个表')
+    return
+  }
+  
+  try {
+    // 提取表名（如果tables是对象数组，需要提取name字段）
+    const selectedTableNames = editTablesForm.value.selected_tables.map(t => 
+      typeof t === 'string' ? t : (t.name || t)
+    )
+    
+    // 调用更新会话API
+    const response = await chatApi.updateSession(currentSessionId.value, {
+      selected_tables: selectedTableNames
+    })
+    
+    if (response.code === 200) {
+      ElMessage.success('更新表选择成功')
+      editTablesDialogVisible.value = false
+      
+      // 重新加载会话详情
+      await selectSession(currentSessionId.value)
+    } else {
+      ElMessage.error(response.message || '更新失败')
+    }
+  } catch (error) {
+    ElMessage.error('更新表选择失败：' + (error.response?.data?.detail || error.message || '未知错误'))
+  }
+}
+
+// 重置编辑表表单
+const resetEditTablesForm = () => {
+  editTablesForm.value = {
+    data_source_id: null,
+    selected_tables: []
+  }
+  editTablesList.value = []
 }
 
 // 创建新对话（保留原有方法，改为显示对话框）
@@ -1618,11 +1870,28 @@ const renderChart = (message) => {
 }
 
 // 格式化时间
+// 格式化解释文本（支持Markdown格式）
+const formatExplanation = (text) => {
+  if (!text) return ''
+  
+  // 将换行符转换为 <br>
+  let formatted = text.replace(/\n/g, '<br>')
+  
+  // 处理 **粗体** 格式
+  formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+  
+  // 处理标题（## 标题）
+  formatted = formatted.replace(/^##\s+(.+)$/gm, '<h3 style="margin: 12px 0 8px 0; font-size: 16px; font-weight: 600; color: #303133;">$1</h3>')
+  
+  return formatted
+}
+
 const formatTime = (time) => {
   if (!time) return ''
   const date = new Date(time)
   return date.toLocaleString('zh-CN')
 }
+
 
 // 快捷键处理
 const handleEnter = (e) => {
@@ -1924,6 +2193,13 @@ onMounted(async () => {
   font-weight: 500;
 }
 
+.table-description {
+  margin-left: 4px;
+  font-size: 11px;
+  color: #f56c6c;
+  font-weight: normal;
+}
+
 .create-session-content {
   padding: 10px 0;
 }
@@ -1968,6 +2244,7 @@ onMounted(async () => {
   margin-bottom: 16px;
 }
 
+
 .section-header {
   display: flex;
   justify-content: space-between;
@@ -2007,11 +2284,28 @@ onMounted(async () => {
 }
 
 .explanation-section {
-  padding: 12px;
-  background: #e6f7ff;
-  border-left: 3px solid #1890ff;
-  border-radius: 4px;
+  padding: 16px;
+  background: linear-gradient(135deg, #f0f9ff 0%, #e6f7ff 100%);
+  border-left: 4px solid #1890ff;
+  border-radius: 8px;
   margin-top: 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 2px 8px rgba(24, 144, 255, 0.1);
+  line-height: 1.8;
+  color: #303133;
+  font-size: 14px;
+}
+
+.explanation-section :deep(strong) {
+  color: #1890ff;
+  font-weight: 600;
+}
+
+.explanation-section :deep(h3) {
+  margin: 12px 0 8px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
 }
 
 .loading-indicator {

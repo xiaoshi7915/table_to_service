@@ -11,23 +11,45 @@ class DataMaskingService:
     """数据脱敏服务"""
     
     # 敏感字段模式（匹配字段名）
+    # 注意：使用单词边界 \b 确保精确匹配，避免误匹配（如 province_name 不应被脱敏）
     SENSITIVE_FIELD_PATTERNS = [
         # 身份证号
-        r'id_card|idcard|身份证|identity_card',
+        r'\bid_card\b|\bidcard\b|身份证|identity_card',
         # 手机号
-        r'phone|mobile|tel|电话|手机',
+        r'\bphone\b|\bmobile\b|\btel\b|电话|手机',
         # 邮箱
-        r'email|mail|邮箱|电子邮箱',
+        r'\bemail\b|\bmail\b|邮箱|电子邮箱',
         # 银行卡号
-        r'bank_card|card_no|银行卡|卡号',
+        r'\bbank_card\b|\bcard_no\b|银行卡|卡号',
         # 密码
-        r'password|pwd|passwd|密码',
-        # 姓名（可能包含敏感信息）
-        r'name|姓名|真实姓名',
-        # 地址
-        r'address|addr|地址|住址',
+        r'\bpassword\b|\bpwd\b|\bpasswd\b|密码',
+        # 姓名（只匹配明确的个人姓名字段，排除地理名称如 province_name, city_name 等）
+        # 使用负向前瞻确保不匹配 _name 结尾的字段（如 province_name, city_name）
+        r'(?<!_)\bname\b(?!_)|姓名|真实姓名|用户姓名|客户姓名|联系人姓名',
+        # 地址（排除地理名称字段）
+        r'\baddress\b|\baddr\b|住址|详细地址|家庭地址',
         # 其他敏感信息
-        r'secret|token|api_key|密钥|秘钥',
+        r'\bsecret\b|\btoken\b|\bapi_key\b|密钥|秘钥',
+    ]
+    
+    # 非敏感字段模式（即使匹配敏感模式，这些字段也不应脱敏）
+    NON_SENSITIVE_FIELD_PATTERNS = [
+        r'province_name|省份名称|省名',
+        r'city_name|城市名称|市名',
+        r'country_name|国家名称|国名',
+        r'region_name|区域名称|地区名称',
+        r'area_name|地区名称',
+        r'table_name|表名',
+        r'column_name|列名',
+        r'field_name|字段名',
+        r'file_name|文件名',
+        r'class_name|类名',
+        r'function_name|函数名',
+        r'method_name|方法名',
+        r'variable_name|变量名',
+        r'user_name|用户名',  # 用户名通常不是敏感信息（除非是真实姓名）
+        r'login_name|登录名',
+        r'display_name|显示名称',
     ]
     
     # 敏感数据模式（匹配数据内容）
@@ -54,6 +76,13 @@ class DataMaskingService:
             是否敏感
         """
         field_lower = field_name.lower()
+        
+        # 首先检查是否在非敏感字段列表中（优先级更高）
+        for pattern in cls.NON_SENSITIVE_FIELD_PATTERNS:
+            if re.search(pattern, field_lower, re.IGNORECASE):
+                return False  # 明确标记为非敏感字段
+        
+        # 然后检查是否匹配敏感字段模式
         for pattern in cls.SENSITIVE_FIELD_PATTERNS:
             if re.search(pattern, field_lower, re.IGNORECASE):
                 return True

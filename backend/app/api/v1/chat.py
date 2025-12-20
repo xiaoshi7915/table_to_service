@@ -91,6 +91,142 @@ async def generate_session_title(
             session.title = first_question[:20] + "..."
 
 
+async def generate_data_summary(
+    question: str,
+    sql: str,
+    data: List[Dict[str, Any]],
+    llm_client: Any
+) -> Optional[str]:
+    """
+    使用LLM对SQL执行结果进行总结分析，生成文字描述
+    
+    Args:
+        question: 用户问题
+        sql: 执行的SQL语句
+        data: SQL执行结果数据
+        llm_client: LLM客户端
+        
+    Returns:
+        数据总结分析的文字描述，如果生成失败则返回None
+    """
+    try:
+        # 即使数据为空，也生成说明
+        if not data or len(data) == 0:
+            # 为空数据生成说明
+            empty_prompt = f"""你是一个数据分析助手。用户执行了以下SQL查询，但查询结果为空（没有找到符合条件的记录）。
+
+用户问题：{question}
+执行的SQL：{sql}
+
+请生成一段简洁的中文说明，解释查询结果为空可能的原因，或者说明当前数据状态。要求：
+1. 用简洁明了的语言
+2. 直接返回说明，不要包含"总结"、"分析"等前缀词
+3. 长度控制在50-100字
+
+说明："""
+            
+            messages = [{"role": "user", "content": empty_prompt}]
+            response = await llm_client.chat_completion(
+                messages=messages,
+                temperature=0.7,
+                max_tokens=200
+            )
+            
+            if isinstance(response, dict):
+                summary = response.get("content", "").strip() or response.get("message", {}).get("content", "").strip()
+            else:
+                summary = str(response).strip()
+            
+            if summary and len(summary) > 10:
+                return summary
+            return "查询结果显示没有找到符合条件的记录。"
+        
+        # 限制数据量，避免token过多（只使用前20条数据进行分析）
+        sample_data = data[:20]
+        total_count = len(data)
+        
+        # 获取数据列名
+        columns = list(sample_data[0].keys()) if sample_data else []
+        
+        # 构建数据摘要（只包含关键信息，避免数据过多）
+        data_summary = []
+        for i, row in enumerate(sample_data[:10]):  # 只展示前10条作为示例
+            row_str = ", ".join([f"{k}: {v}" for k, v in list(row.items())[:5]])  # 每行只展示前5个字段
+            data_summary.append(f"第{i+1}条: {row_str}")
+        
+        # 检查数据是否全为0或空值
+        all_zero = True
+        for row in sample_data[:5]:
+            for key, value in row.items():
+                if value is not None and value != 0 and value != "" and str(value).lower() != "null":
+                    all_zero = False
+                    break
+            if not all_zero:
+                break
+        
+        # 构建提示词
+        if all_zero and total_count > 0:
+            # 如果数据全为0，生成特殊说明
+            summary_prompt = f"""你是一个数据分析助手。用户执行了以下SQL查询，查询返回了{total_count}条记录，但所有数值都为0。
+
+用户问题：{question}
+执行的SQL：{sql}
+查询结果：共{total_count}条记录，所有数值字段都为0
+
+请生成一段简洁的中文说明，解释这个结果的含义。要求：
+1. 说明查询结果的含义（比如"查询结果显示没有符合条件的记录"或"当前数据中该指标为0"）
+2. 用简洁明了的语言，直接回答用户的问题
+3. 直接返回说明，不要包含"总结"、"分析"等前缀词
+4. 长度控制在100-150字
+
+说明："""
+        else:
+            summary_prompt = f"""你是一个数据分析助手。请对以下SQL查询结果进行总结分析，生成一段简洁、准确的中文文字描述。
+
+用户问题：{question}
+执行的SQL：{sql}
+
+查询结果：
+- 总记录数：{total_count}条
+- 数据列：{', '.join(columns[:10])}
+- 示例数据（前10条）：
+{chr(10).join(data_summary)}
+
+请生成一段200-300字的数据分析总结，要求：
+1. 概括数据的主要特征和关键信息
+2. 指出数据的分布情况、趋势或异常
+3. 用简洁明了的语言，避免技术术语
+4. 直接返回分析结果，不要包含"总结"、"分析"等前缀词
+5. 如果数据量很大，可以说明数据规模
+
+数据分析："""
+        
+        # 调用LLM生成总结
+        messages = [{"role": "user", "content": summary_prompt}]
+        response = await llm_client.chat_completion(
+            messages=messages,
+            temperature=0.7,
+            max_tokens=500  # 总结需要更多token
+        )
+        
+        # 提取总结内容
+        if isinstance(response, dict):
+            summary = response.get("content", "").strip() or response.get("message", {}).get("content", "").strip()
+        else:
+            summary = str(response).strip()
+        
+        if summary and len(summary) > 10:  # 确保有实际内容
+            logger.info(f"生成数据总结成功，长度: {len(summary)}")
+            return summary
+        else:
+            logger.warning("LLM返回的数据总结为空或过短")
+            return None
+            
+    except Exception as e:
+        logger.warning(f"生成数据总结失败: {e}，不影响主流程")
+        return None
+
+
 # 请求模型
 class CreateSessionRequest(BaseModel):
     """创建会话请求"""
@@ -101,7 +237,8 @@ class CreateSessionRequest(BaseModel):
 
 class UpdateSessionRequest(BaseModel):
     """更新会话请求"""
-    title: str
+    title: Optional[str] = None
+    selected_tables: Optional[List[str]] = None  # 用户选择的表列表
 
 
 class SendMessageRequest(BaseModel):
@@ -333,6 +470,67 @@ async def get_session(
             except:
                 pass
         
+        # 获取表描述信息（如果会话有数据源和选择的表）
+        table_info = []
+        if session.data_source_id and selected_tables:
+            try:
+                from app.core.db_factory import DatabaseConnectionFactory
+                from sqlalchemy import inspect, text
+                
+                db_config = db.query(DatabaseConfig).filter(
+                    DatabaseConfig.id == session.data_source_id
+                ).first()
+                
+                if db_config:
+                    db_type = db_config.db_type or "mysql"
+                    engine = DatabaseConnectionFactory.create_engine(db_config)
+                    
+                    try:
+                        for table_name in selected_tables:
+                            table_desc = {"name": table_name, "description": ""}
+                            
+                            # 尝试获取表注释/描述
+                            try:
+                                if db_type == "mysql":
+                                    with engine.connect() as conn:
+                                        comment_query = text("""
+                                            SELECT TABLE_COMMENT 
+                                            FROM INFORMATION_SCHEMA.TABLES 
+                                            WHERE TABLE_SCHEMA = :db_name 
+                                            AND TABLE_NAME = :table_name
+                                        """)
+                                        result = conn.execute(comment_query, {
+                                            "db_name": db_config.database,
+                                            "table_name": table_name
+                                        })
+                                        row = result.fetchone()
+                                        if row and row[0]:
+                                            table_desc["description"] = row[0]
+                                elif db_type == "postgresql":
+                                    with engine.connect() as conn:
+                                        comment_query = text("""
+                                            SELECT obj_description(c.oid, 'pg_class') as table_comment
+                                            FROM pg_class c
+                                            JOIN pg_namespace n ON c.relnamespace = n.oid
+                                            WHERE c.relname = :table_name 
+                                            AND n.nspname = 'public'
+                                        """)
+                                        result = conn.execute(comment_query, {"table_name": table_name})
+                                        row = result.fetchone()
+                                        if row and row[0]:
+                                            table_desc["description"] = row[0]
+                            except Exception as e:
+                                logger.debug(f"获取表 {table_name} 注释失败: {e}")
+                            
+                            table_info.append(table_desc)
+                        
+                        engine.dispose()
+                    except Exception as e:
+                        engine.dispose()
+                        logger.warning(f"获取表描述信息失败: {e}")
+            except Exception as e:
+                logger.debug(f"获取表描述信息失败: {e}")
+        
         return ResponseModel(
             success=True,
             message="获取成功",
@@ -342,6 +540,7 @@ async def get_session(
                 "data_source_id": session.data_source_id,
                 "data_source_name": data_source_name,
                 "selected_tables": selected_tables,
+                "table_info": table_info,  # 表信息（包含描述）
                 "status": session.status,
                 "created_at": session.created_at.isoformat(),
                 "updated_at": session.updated_at.isoformat(),
@@ -363,7 +562,7 @@ async def update_session(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_local_db)
 ):
-    """更新会话（重命名）"""
+    """更新会话（重命名或更新选择的表）"""
     try:
         session = db.query(ChatSession).filter(
             ChatSession.id == session_id,
@@ -373,16 +572,33 @@ async def update_session(
         if not session:
             raise HTTPException(status_code=404, detail="会话不存在")
         
-        session.title = request.title
+        # 更新标题（如果提供）
+        if request.title is not None:
+            session.title = request.title
+        
+        # 更新选择的表（如果提供）
+        if request.selected_tables is not None:
+            import json
+            session.selected_tables = json.dumps(request.selected_tables, ensure_ascii=False)
+        
         db.commit()
         db.refresh(session)
+        
+        # 解析selected_tables用于返回
+        selected_tables = None
+        if session.selected_tables:
+            try:
+                selected_tables = json.loads(session.selected_tables)
+            except:
+                pass
         
         return ResponseModel(
             success=True,
             message="更新成功",
             data={
                 "id": session.id,
-                "title": session.title
+                "title": session.title,
+                "selected_tables": selected_tables
             }
         )
         
@@ -957,26 +1173,47 @@ SQL执行失败，错误信息：{execution_error or error}
                 }
             )
         
-        # 13. 生成动态推荐问题（基于当前会话上下文、数据源和选择的表）
+        # 13. 使用LLM对数据结果进行总结分析（如果有数据）
+        data_summary = None
+        if data and len(data) > 0 and llm_client:
+            try:
+                data_summary = await generate_data_summary(
+                    question=request.question,
+                    sql=final_sql,
+                    data=data,
+                    llm_client=llm_client
+                )
+                if data_summary:
+                    logger.info(f"生成数据总结成功，长度: {len(data_summary)}")
+            except Exception as e:
+                logger.warning(f"生成数据总结失败: {e}，不影响主流程")
+        
+        # 14. 生成动态推荐问题（基于当前会话上下文、数据源和选择的表，使用LLM生成）
         recommended_questions = []
         try:
-            recommended_questions = generate_dynamic_recommendations(
+            recommended_questions = await generate_dynamic_recommendations(
                 session_id=session_id,
                 current_question=request.question,  # 使用原始问题
                 sql=final_sql,
                 data=data[:10] if data else None,  # 只使用前10条数据用于分析
                 db=db,
                 current_user=current_user,
-                selected_tables=selected_tables  # 传递选择的表列表
+                selected_tables=selected_tables,  # 传递选择的表列表
+                llm_client=llm_client  # 传递LLM客户端用于生成推荐问题
             )
         except Exception as e:
             logger.warning(f"生成动态推荐问题失败: {e}，将返回空列表")
         
-        # 14. 保存AI回复
+        # 15. 保存AI回复（包含数据总结）
+        # 如果有数据总结，将其合并到explanation中
+        explanation_content = workflow_result.get("explanation", "SQL生成并执行成功")
+        if data_summary:
+            explanation_content = f"{explanation_content}\n\n**数据分析总结：**\n{data_summary}"
+        
         assistant_message = ChatMessage(
             session_id=session_id,
             role="assistant",
-            content=workflow_result.get("explanation", "SQL生成并执行成功"),
+            content=explanation_content,
             sql_statement=final_sql,
             chart_type=chart_config.get("type") if chart_config else None,
             chart_config=json.dumps(chart_config, ensure_ascii=False) if chart_config else None,
@@ -1012,7 +1249,8 @@ SQL执行失败，错误信息：{execution_error or error}
             data={
                 "id": assistant_message.id,
                 "sql": final_sql,
-                "explanation": workflow_result.get("explanation", "SQL生成并执行成功"),
+                "explanation": explanation_content,  # 包含数据总结的完整解释
+                "data_summary": data_summary,  # 单独返回数据总结（可选）
                 "chart_type": chart_config.get("type") if chart_config else None,
                 "chart_config": chart_config,
                 "data": data[:100] if data else [],  # 只返回前100条
@@ -1147,6 +1385,7 @@ async def get_messages(
                 "session_id": msg.session_id,
                 "role": msg.role,
                 "content": msg.content,
+                "explanation": msg.content,  # 将content映射为explanation，因为content包含LLM生成的数据分析总结
                 "sql": msg.sql_statement,
                 "chart_type": msg.chart_type,
                 "chart_config": chart_config,

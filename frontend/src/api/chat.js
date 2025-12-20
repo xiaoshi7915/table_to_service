@@ -43,12 +43,13 @@ export default {
     })
   },
   
-  // 发送消息
+  // 发送消息（设置更长的超时时间，因为SQL生成和LLM调用可能需要较长时间）
   sendMessage(sessionId, data) {
     return request({
       url: `/api/v1/chat/sessions/${sessionId}/messages`,
       method: 'post',
-      data
+      data,
+      timeout: 120000 // 120秒超时（2分钟），给SQL生成和LLM调用足够的时间
     })
   },
   
