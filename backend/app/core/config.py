@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     REDIS_DB: int = int(os.getenv("REDIS_DB", "0"))  # Redis数据库编号（默认0）
     CACHE_TTL: int = int(os.getenv("CACHE_TTL", "3600"))  # 缓存过期时间（秒，默认1小时）
     
+    # 数据库连接池配置（可选，用于优化性能）
+    DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "10"))  # 连接池大小（默认10）
+    DB_MAX_OVERFLOW: int = int(os.getenv("DB_MAX_OVERFLOW", "20"))  # 最大溢出连接数（默认20）
+    DB_POOL_RECYCLE: int = int(os.getenv("DB_POOL_RECYCLE", "3600"))  # 连接回收时间（秒，默认1小时）
+    LOCAL_DB_POOL_SIZE: int = int(os.getenv("LOCAL_DB_POOL_SIZE", "5"))  # 本地数据库连接池大小（默认5）
+    LOCAL_DB_MAX_OVERFLOW: int = int(os.getenv("LOCAL_DB_MAX_OVERFLOW", "10"))  # 本地数据库最大溢出连接数（默认10）
+    
     @property
     def database_url(self) -> str:
         """生成目标数据库连接URL（用于表转服务）"""
@@ -94,9 +101,19 @@ settings = Settings()
 
 # 检查SECRET_KEY是否为默认值（生产环境安全警告）
 if settings.SECRET_KEY == "your-secret-key-change-this-in-production":
-    import warnings
-    warnings.warn(
-        "⚠️  安全警告：SECRET_KEY使用默认值，生产环境请务必修改！",
-        UserWarning
-    )
+    if not settings.DEBUG:
+        # 生产环境：记录ERROR并建议停止服务
+        logger.error("=" * 60)
+        logger.error("⚠️  严重安全警告：SECRET_KEY使用默认值！")
+        logger.error("生产环境必须修改SECRET_KEY，否则存在严重安全风险！")
+        logger.error("请在.env文件中设置一个强随机字符串作为SECRET_KEY")
+        logger.error("=" * 60)
+        # 注意：这里不阻止启动，但记录严重警告
+    else:
+        # 开发环境：使用warnings
+        import warnings
+        warnings.warn(
+            "⚠️  安全警告：SECRET_KEY使用默认值，生产环境请务必修改！",
+            UserWarning
+        )
 

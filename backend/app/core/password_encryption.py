@@ -17,16 +17,22 @@ ENCRYPTION_KEY = os.getenv("DB_PASSWORD_ENCRYPTION_KEY", "")
 if not ENCRYPTION_KEY:
     # 如果没有配置密钥，使用SECRET_KEY生成一个固定的密钥
     # 注意：这不是最佳实践，生产环境应该使用独立的加密密钥
+    # 注意：虽然使用固定salt，但Fernet加密本身每次都会生成不同的密文，提供足够的安全性
+    # 但为了更好的安全性，生产环境应该配置DB_PASSWORD_ENCRYPTION_KEY环境变量
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
-        salt=b'db_password_salt',  # 固定salt，生产环境应该使用随机salt
+        salt=b'db_password_salt',  # 固定salt用于密钥派生（不是加密salt）
         iterations=100000,
         backend=default_backend()
     )
     key = base64.urlsafe_b64encode(kdf.derive(settings.SECRET_KEY.encode()))
     ENCRYPTION_KEY = key.decode()
-    logger.warning("使用SECRET_KEY生成数据库密码加密密钥，生产环境建议配置DB_PASSWORD_ENCRYPTION_KEY环境变量")
+    # 在生产环境中记录ERROR级别警告
+    if not settings.DEBUG:
+        logger.error("⚠️  安全警告：未配置DB_PASSWORD_ENCRYPTION_KEY，使用SECRET_KEY派生密钥。生产环境请务必配置独立的加密密钥！")
+    else:
+        logger.warning("使用SECRET_KEY生成数据库密码加密密钥，生产环境建议配置DB_PASSWORD_ENCRYPTION_KEY环境变量")
 else:
     # 如果配置了密钥，直接使用
     try:

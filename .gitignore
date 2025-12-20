@@ -66,3 +66,5 @@ backend/tests/
 *.pid
 .cache/
 implementation_roadmap.md
+design.md
+requirements.md

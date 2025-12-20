@@ -33,23 +33,52 @@ class DataMaskingService:
     ]
     
     # 非敏感字段模式（即使匹配敏感模式，这些字段也不应脱敏）
+    # 优先级高于敏感字段模式，确保这些字段不会被误判为敏感信息
     NON_SENSITIVE_FIELD_PATTERNS = [
+        # 地理名称字段
         r'province_name|省份名称|省名',
         r'city_name|城市名称|市名',
         r'country_name|国家名称|国名',
         r'region_name|区域名称|地区名称',
         r'area_name|地区名称',
+        r'district_name|区县名称|区名',
+        r'zone_name|区域名称',
+        # 数据库/技术相关字段
         r'table_name|表名',
         r'column_name|列名',
         r'field_name|字段名',
+        r'database_name|数据库名',
+        r'schema_name|模式名',
+        r'index_name|索引名',
+        r'constraint_name|约束名',
+        # 文件/代码相关字段
         r'file_name|文件名',
         r'class_name|类名',
         r'function_name|函数名',
         r'method_name|方法名',
         r'variable_name|变量名',
-        r'user_name|用户名',  # 用户名通常不是敏感信息（除非是真实姓名）
+        r'package_name|包名',
+        r'module_name|模块名',
+        # 用户标识字段（非真实姓名）
+        r'user_name|用户名',
         r'login_name|登录名',
+        r'account_name|账户名',
         r'display_name|显示名称',
+        r'nick_name|昵称',
+        r'alias_name|别名',
+        # 业务实体名称
+        r'company_name|公司名称',
+        r'organization_name|组织名称',
+        r'department_name|部门名称',
+        r'product_name|产品名称',
+        r'category_name|分类名称',
+        r'type_name|类型名称',
+        r'status_name|状态名称',
+        # 其他非敏感名称字段
+        r'item_name|项目名称',
+        r'group_name|组名',
+        r'role_name|角色名称',
+        r'permission_name|权限名称',
     ]
     
     # 敏感数据模式（匹配数据内容）

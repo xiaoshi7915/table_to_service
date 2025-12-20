@@ -10,27 +10,29 @@ from app.core.config import settings
 from loguru import logger
 
 # 创建目标数据库引擎（用于表转服务的目标数据库）
+# 使用配置中的连接池参数，支持通过环境变量调整
 target_engine = create_engine(
     settings.database_url,
     pool_pre_ping=True,  # 连接前检查连接是否有效
-    pool_recycle=3600,   # 1小时后回收连接
-    pool_size=10,        # 连接池大小
-    max_overflow=20,     # 最大溢出连接数
+    pool_recycle=settings.DB_POOL_RECYCLE,   # 连接回收时间（可配置）
+    pool_size=settings.DB_POOL_SIZE,        # 连接池大小（可配置）
+    max_overflow=settings.DB_MAX_OVERFLOW,     # 最大溢出连接数（可配置）
     echo=settings.DEBUG,  # 是否打印SQL语句
     connect_args={
-        "connect_timeout": 15,  # 连接超时时间（秒）- 增加到15秒
-        "read_timeout": 30,    # 读取超时时间（秒）- 增加到30秒
-        "write_timeout": 30,   # 写入超时时间（秒）- 增加到30秒
+        "connect_timeout": 15,  # 连接超时时间（秒）
+        "read_timeout": 30,    # 读取超时时间（秒）
+        "write_timeout": 30,   # 写入超时时间（秒）
     }
 )
 
 # 创建本地数据库引擎（用于服务自身数据存储）
+# 使用独立的连接池配置，通常需要更少的连接
 local_engine = create_engine(
     settings.local_database_url,
     pool_pre_ping=True,
-    pool_recycle=3600,
-    pool_size=5,
-    max_overflow=10,
+    pool_recycle=settings.DB_POOL_RECYCLE,
+    pool_size=settings.LOCAL_DB_POOL_SIZE,  # 本地数据库连接池大小（可配置）
+    max_overflow=settings.LOCAL_DB_MAX_OVERFLOW,  # 本地数据库最大溢出连接数（可配置）
     echo=settings.DEBUG,
     connect_args={
         "connect_timeout": 10,

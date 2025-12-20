@@ -53,7 +53,7 @@ request.interceptors.response.use(
     return response
   },
   (error) => {
-    // 401错误处理
+    // 401错误处理（未授权）
     if (error.response?.status === 401) {
       const authStore = useAuthStore()
       const currentPath = window.location.pathname
@@ -66,16 +66,48 @@ request.interceptors.response.use(
         window.location.href = '/login'
       }
       // 如果是登录接口返回401，不处理，让登录页面显示错误
-    } else if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
-      // 超时错误处理
+    } 
+    // 403错误处理（禁止访问）
+    else if (error.response?.status === 403) {
+      ElMessage.error('没有权限访问该资源')
+    }
+    // 404错误处理（资源未找到）
+    else if (error.response?.status === 404) {
+      ElMessage.error('请求的资源不存在')
+    }
+    // 422错误处理（参数验证失败）
+    else if (error.response?.status === 422) {
+      const detail = error.response.data?.detail || error.response.data?.message
+      if (Array.isArray(detail)) {
+        // Pydantic验证错误
+        const firstError = detail[0]?.msg || detail[0]?.message || '请求参数不正确'
+        ElMessage.error(firstError)
+      } else {
+        ElMessage.error(detail || '请求参数不正确')
+      }
+    }
+    // 500错误处理（服务器错误）
+    else if (error.response?.status === 500) {
+      ElMessage.error('服务器内部错误，请稍后重试或联系管理员')
+    }
+    // 超时错误处理
+    else if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
       ElMessage.error('请求超时，请稍后重试。如果问题持续，请检查网络连接或联系管理员')
-    } else if (error.response?.data?.detail) {
-      ElMessage.error(error.response.data.detail)
-    } else if (!error.response) {
-      // 网络错误等
-      ElMessage.error('网络错误，请检查连接')
-    } else {
-      ElMessage.error('请求失败，请稍后重试')
+    } 
+    // 网络错误处理
+    else if (!error.response) {
+      if (error.message === 'Network Error') {
+        ElMessage.error('网络连接失败，请检查网络设置')
+      } else {
+        ElMessage.error('网络错误，请检查连接')
+      }
+    } 
+    // 其他错误
+    else {
+      const errorMessage = error.response.data?.message || 
+                          error.response.data?.detail || 
+                          `请求失败 (${error.response.status})`
+      ElMessage.error(errorMessage)
     }
     return Promise.reject(error)
   }

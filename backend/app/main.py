@@ -16,6 +16,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 from app.core.config import settings
 from app.core.database import Base, local_engine, test_local_connection
+from app.core.exceptions import BaseAPIException
 from app.api.v1 import api_router
 from app.api.v1 import auth, api_docs, interface_configs, interface_executor, database_configs, table_configs, interface_proxy, ai_models, terminologies, sql_examples, prompts, knowledge, chat, chat_schema, chat_recommendations, chat_export, dashboards
 
@@ -34,9 +35,22 @@ logs_dir.mkdir(exist_ok=True)
 logger.add(
     str(logs_dir / "app_{time:YYYY-MM-DD}.log"),
     rotation="00:00",
-    retention="30 days",
+    retention="30 days",  # 保留30天日志
     format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
-    level="DEBUG"
+    level="DEBUG",
+    compression="zip",  # 压缩旧日志文件
+    enqueue=True  # 线程安全
+)
+
+# 添加错误日志单独文件
+logger.add(
+    str(logs_dir / "error_{time:YYYY-MM-DD}.log"),
+    rotation="00:00",
+    retention="90 days",  # 错误日志保留更长时间
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+    level="ERROR",
+    compression="zip",
+    enqueue=True
 )
 
 # 创建FastAPI应用
@@ -101,6 +115,22 @@ app.add_middleware(
 )
 
 # 全局异常处理
+@app.exception_handler(BaseAPIException)
+async def api_exception_handler(request: Request, exc: BaseAPIException):
+    """自定义API异常处理"""
+    logger.warning("API异常: {} - {}", exc.status_code, exc.message)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "success": False,
+            "message": exc.message,
+            "error_code": exc.error_code,
+            "detail": exc.detail if settings.DEBUG else exc.message,
+            "data": exc.data
+        }
+    )
+
+
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     """HTTP异常处理"""

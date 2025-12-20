@@ -2,7 +2,6 @@
 RAG工作流
 使用LangGraph实现多步骤RAG流程，包含错误重试机制
 """
-import json
 import re
 from typing import TypedDict, List, Dict, Any, Optional, Annotated
 from langgraph.graph import StateGraph, END
@@ -25,25 +24,6 @@ from .schema_service import SchemaService
 # 延迟导入rag_chain，避免循环依赖
 # from .rag_chain import SQLRAGChain
 
-# #region agent log
-DEBUG_LOG_PATH = "/opt/table_to_service/.cursor/debug.log"
-def _debug_log(location, message, data, hypothesis_id=None):
-    try:
-        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            import time
-            log_entry = {
-                "sessionId": "debug-session",
-                "runId": "run1",
-                "hypothesisId": hypothesis_id,
-                "location": location,
-                "message": message,
-                "data": data,
-                "timestamp": int(time.time() * 1000)
-            }
-            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-# #endregion
 
 
 class RAGState(TypedDict):
@@ -277,66 +257,33 @@ class RAGWorkflow:
                 if hasattr(self.llm, 'invoke'):
                     response = self.llm.invoke(prompt)
                     sql_raw = response.content if hasattr(response, 'content') else str(response)
+                    
+                    # 检查是否是错误消息
+                    if sql_raw and ("LLM调用失败" in sql_raw or "调用失败" in sql_raw or "LLM客户端未初始化" in sql_raw):
+                        logger.error("LLM返回错误消息: %s", sql_raw[:200])
+                        raise ValueError(f"LLM调用失败: {sql_raw}")
                 elif hasattr(self.llm, '_generate'):
                     # 使用_generate方法
                     result = self.llm._generate([prompt])
                     if result.generations and result.generations[0]:
                         sql_raw = result.generations[0][0].text
+                        # 检查是否是错误消息
+                        if sql_raw and ("生成失败" in sql_raw or "LLM调用失败" in sql_raw):
+                            raise ValueError(f"LLM生成失败: {sql_raw}")
                     else:
                         sql_raw = ""
                 else:
                     # 降级方案：尝试直接调用
                     sql_raw = str(self.llm(prompt))
-                
-                # #region agent log
-                _debug_log(
-                    "rag_workflow.py:257",
-                    "LLM原始响应",
-                    {
-                        "sql_raw_length": len(sql_raw),
-                        "sql_raw_preview": sql_raw[:500],
-                        "has_with": "WITH" in sql_raw.upper(),
-                        "has_paren_start": sql_raw.strip().startswith("("),
-                        "select_count": sql_raw.upper().count("SELECT")
-                    },
-                    "D"
-                )
-                # #endregion
+                    # 检查是否是错误消息
+                    if sql_raw and ("调用失败" in sql_raw or "LLM" in sql_raw):
+                        raise ValueError(f"LLM调用失败: {sql_raw}")
                 
                 # 提取SQL（移除可能的Markdown格式）
                 sql = self._extract_sql(sql_raw)
                 
-                # #region agent log
-                _debug_log(
-                    "rag_workflow.py:270",
-                    "提取后的SQL",
-                    {
-                        "sql_length": len(sql),
-                        "sql_preview": sql[:300],
-                        "has_with": "WITH" in sql.upper(),
-                        "starts_with_paren": sql.strip().startswith("("),
-                        "select_count": sql.upper().count("SELECT")
-                    },
-                    "A"
-                )
-                # #endregion
-                
                 # 修复缺少WITH关键字的CTE
                 sql = self._fix_cte_sql(sql)
-                
-                # #region agent log
-                _debug_log(
-                    "rag_workflow.py:286",
-                    "修复后的SQL",
-                    {
-                        "sql_length": len(sql),
-                        "sql_preview": sql[:300],
-                        "has_with_after": "WITH" in sql.upper(),
-                        "changed": sql != self._extract_sql(sql_raw)
-                    },
-                    "B"
-                )
-                # #endregion
                 
                 # 检查SQL是否包含不允许的语句（CREATE、DROP等）
                 sql_upper = sql.upper().strip()
@@ -360,7 +307,11 @@ class RAGWorkflow:
                 logger.error(f"LLM调用失败: {e}", exc_info=True)
                 # 如果LLM调用失败，尝试使用RAG链
                 try:
-                    from .rag_chain import SQLRAGChain
+                    try:
+                        from .rag_chain import SQLRAGChain
+                    except ImportError as import_err:
+                        logger.error(f"无法导入RAG链模块: {import_err}", exc_info=True)
+                        raise ValueError(f"RAG链模块不可用: {str(import_err)}")
                     # 创建临时检索器（使用合并后的上下文）
                     try:
                         from langchain_core.retrievers import BaseRetriever
@@ -391,11 +342,29 @@ class RAGWorkflow:
                 except Exception as e2:
                     logger.error(f"RAG链生成SQL也失败: {e2}")
                     state["sql"] = ""
-                    state["execution_error"] = f"生成SQL失败: {str(e)}"
+                    # 使用原始LLM错误，而不是RAG链错误
+                    error_msg = f"生成SQL失败: {str(e)}"
+                    state["execution_error"] = error_msg
+                    # 设置sql_execution_result，确保_should_retry能正确判断
+                    state["sql_execution_result"] = {
+                        "success": False,
+                        "error": error_msg
+                    }
+                    # 增加重试计数，但不再重试（因为已经达到最大重试次数或LLM调用失败）
+                    state["retry_count"] = state.get("retry_count", 0) + 1
+                    # 不再重试，直接返回失败状态
+                    return state
         except Exception as e:
             logger.error(f"生成SQL失败: {e}", exc_info=True)
+            # 设置错误状态，确保_should_retry能正确判断
+            error_msg = f"生成SQL失败: {str(e)}"
+            state["execution_error"] = error_msg
+            state["sql_execution_result"] = {
+                "success": False,
+                "error": error_msg
+            }
+            state["retry_count"] = state.get("retry_count", 0) + 1
             state["sql"] = ""
-            state["execution_error"] = f"生成SQL失败: {str(e)}"
         
         return state
     
@@ -417,8 +386,14 @@ class RAGWorkflow:
             return state
         
         if not sql:
-            state["execution_error"] = "SQL语句为空"
-            state["sql_execution_result"] = None
+            error_msg = "SQL语句为空，LLM调用可能失败"
+            state["execution_error"] = error_msg
+            state["sql_execution_result"] = {
+                "success": False,
+                "error": error_msg
+            }
+            # 增加重试计数，但不再重试（因为LLM调用失败）
+            state["retry_count"] = state.get("retry_count", 0) + 1
             return state
         
         try:
@@ -590,36 +565,13 @@ class RAGWorkflow:
     
     def _extract_sql(self, text: str) -> str:
         """从文本中提取SQL"""
-        # #region agent log
-        _debug_log(
-            "rag_workflow.py:_extract_sql",
-            "开始提取SQL",
-            {
-                "text_length": len(text),
-                "text_preview": text[:300],
-                "has_code_block": "```" in text,
-                "has_with": "WITH" in text.upper()
-            },
-            "A"
-        )
-        # #endregion
+        
         
         # 移除Markdown代码块（保留内容）
         original_text = text
         text = re.sub(r'```(?:sql)?\s*\n?(.*?)\n?```', r'\1', text, flags=re.DOTALL)
         
-        # #region agent log
-        _debug_log(
-            "rag_workflow.py:_extract_sql",
-            "移除Markdown后",
-            {
-                "text_length": len(text),
-                "text_preview": text[:300],
-                "has_with": "WITH" in text.upper()
-            },
-            "A"
-        )
-        # #endregion
+        
 
         # 检查是否包含CREATE等语句
         text_upper = text.upper()
@@ -653,17 +605,7 @@ class RAGWorkflow:
         with_match = re.search(with_pattern, text, re.DOTALL | re.IGNORECASE)
         if with_match:
             extracted = with_match.group(1).strip()
-            # #region agent log
-            _debug_log(
-                "rag_workflow.py:_extract_sql",
-                "匹配到WITH CTE",
-                {
-                    "extracted_length": len(extracted),
-                    "extracted_preview": extracted[:300]
-                },
-                "A"
-            )
-            # #endregion
+            
             return extracted
         
         # 如果上面的正则没匹配到（可能括号嵌套复杂），尝试手动解析
@@ -681,17 +623,7 @@ class RAGWorkflow:
                 else:
                     extracted = remaining.strip()
                 
-                # #region agent log
-                _debug_log(
-                    "rag_workflow.py:_extract_sql",
-                    "手动提取WITH CTE",
-                    {
-                        "extracted_length": len(extracted),
-                        "extracted_preview": extracted[:300]
-                    },
-                    "A"
-                )
-                # #endregion
+                
                 
                 if extracted and "WITH" in extracted.upper():
                     return extracted
@@ -714,33 +646,12 @@ class RAGWorkflow:
             match = re.search(r'(SELECT\s+.*?)(?:;|$)', text, re.DOTALL | re.IGNORECASE)
             if match:
                 extracted = match.group(1).strip()
-                # #region agent log
-                _debug_log(
-                    "rag_workflow.py:_extract_sql",
-                    "提取普通SELECT（可能不完整）",
-                    {
-                        "extracted_length": len(extracted),
-                        "extracted_preview": extracted[:300],
-                        "select_count": extracted.upper().count("SELECT")
-                    },
-                    "A"
-                )
-                # #endregion
+                
                 return extracted
 
         # 清理空白
         result = ' '.join(text.split()).strip()
-        # #region agent log
-        _debug_log(
-            "rag_workflow.py:_extract_sql",
-            "最终提取结果",
-            {
-                "result_length": len(result),
-                "result_preview": result[:300]
-            },
-            "A"
-        )
-        # #endregion
+        
         return result
     
     def _fix_cte_sql(self, sql: str) -> str:
@@ -754,18 +665,7 @@ class RAGWorkflow:
         if sql_upper.startswith('WITH'):
             return sql
         
-        # #region agent log
-        _debug_log(
-            "rag_workflow.py:_fix_cte_sql",
-            "开始修复CTE",
-            {
-                "sql_starts_with_paren": sql.strip().startswith("("),
-                "sql_length": len(sql),
-                "sql_preview": sql[:200]
-            },
-            "B"
-        )
-        # #endregion
+        
         
         # 检测模式：以括号包围的SELECT开头，后面跟着另一个SELECT
         if sql.strip().startswith('('):
@@ -781,32 +681,12 @@ class RAGWorkflow:
                         cte_end = i + 1
                         break
             
-            # #region agent log
-            _debug_log(
-                "rag_workflow.py:_fix_cte_sql",
-                "括号解析结果",
-                {
-                    "cte_end": cte_end,
-                    "paren_count": paren_count
-                },
-                "E"
-            )
-            # #endregion
+            
             
             if cte_end > 0:
                 # 检查后面是否跟着SELECT
                 remaining = sql[cte_end:].strip()
-                # #region agent log
-                _debug_log(
-                    "rag_workflow.py:_fix_cte_sql",
-                    "检查剩余部分",
-                    {
-                        "remaining_preview": remaining[:200],
-                        "starts_with_select": remaining.upper().startswith("SELECT")
-                    },
-                    "E"
-                )
-                # #endregion
+                
                 
                 if remaining.upper().startswith('SELECT'):
                     # 提取CTE部分
@@ -814,17 +694,7 @@ class RAGWorkflow:
                     
                     # 从主查询中提取CTE名称
                     from_match = re.search(r'FROM\s+(\w+)', remaining, re.IGNORECASE)
-                    # #region agent log
-                    _debug_log(
-                        "rag_workflow.py:_fix_cte_sql",
-                        "FROM匹配结果",
-                        {
-                            "from_match_found": from_match is not None,
-                            "cte_name": from_match.group(1) if from_match else None
-                        },
-                        "E"
-                    )
-                    # #endregion
+                    
                     
                     if from_match:
                         cte_name = from_match.group(1)
@@ -833,17 +703,7 @@ class RAGWorkflow:
                         fixed_sql = f"WITH {cte_name} AS (\n    {cte_query}\n)\n{remaining}"
                         logger.info(f"检测到缺少WITH关键字的CTE，已自动修复: {cte_name}")
                         
-                        # #region agent log
-                        _debug_log(
-                            "rag_workflow.py:_fix_cte_sql",
-                            "CTE修复成功",
-                            {
-                                "cte_name": cte_name,
-                                "fixed_sql_preview": fixed_sql[:300]
-                            },
-                            "E"
-                        )
-                        # #endregion
+                        
                         
                         return fixed_sql
         

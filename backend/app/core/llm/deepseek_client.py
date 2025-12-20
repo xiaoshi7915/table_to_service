@@ -36,7 +36,7 @@ class DeepSeekClient(BaseLLMClient):
         try:
             self.encoding = tiktoken.get_encoding("cl100k_base")
         except Exception as e:
-            logger.warning(f"初始化tiktoken编码器失败: {e}，将使用简单估算")
+            logger.warning("初始化tiktoken编码器失败: %s，将使用简单估算", str(e))
             self.encoding = None
     
     async def chat_completion(
@@ -82,7 +82,8 @@ class DeepSeekClient(BaseLLMClient):
             }
             
         except Exception as e:
-            logger.error(f"DeepSeek API调用失败: {e}", exc_info=True)
+            # 使用 %s 格式化避免 loguru 解析错误消息中的 {error} 等占位符
+            logger.error("DeepSeek API调用失败: %s", str(e), exc_info=True)
             raise ValueError(f"DeepSeek API调用失败: {str(e)}")
     
     def count_tokens(self, text: str) -> int:
@@ -99,7 +100,7 @@ class DeepSeekClient(BaseLLMClient):
             try:
                 return len(self.encoding.encode(text))
             except Exception as e:
-                logger.warning(f"Token计数失败: {e}")
+                logger.warning("Token计数失败: %s", str(e))
         
         # 简单估算：中文约1.5字符=1token，英文约4字符=1token
         chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')

@@ -4,6 +4,7 @@
 """
 import hashlib
 import json
+import threading
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 from loguru import logger
@@ -30,6 +31,7 @@ class CacheService:
         self.default_ttl = default_ttl
         self.redis_client = None
         self.memory_cache: Dict[str, Dict[str, Any]] = {}
+        self._cache_lock = threading.Lock()  # 用于线程安全的缓存操作
         
         # 如果提供了Redis URL且Redis可用，使用Redis
         if redis_url and REDIS_AVAILABLE:
@@ -54,6 +56,10 @@ class CacheService:
                 logger.info("使用内存缓存（Redis库未安装）")
             else:
                 logger.info("使用内存缓存（Redis未配置）")
+        
+        # 如果使用内存缓存，启动定期清理任务
+        if self.redis_client is None:
+            self._start_cleanup_task()
     
     def _generate_key(self, prefix: str, *args, **kwargs) -> str:
         """
@@ -74,8 +80,8 @@ class CacheService:
         }
         key_str = json.dumps(key_data, sort_keys=True, ensure_ascii=False)
         
-        # 使用MD5生成短键
-        key_hash = hashlib.md5(key_str.encode('utf-8')).hexdigest()
+        # 使用SHA256生成缓存键（更安全，避免MD5冲突）
+        key_hash = hashlib.sha256(key_str.encode('utf-8')).hexdigest()
         return f"{prefix}:{key_hash}"
     
     def get(self, key: str) -> Optional[Any]:
@@ -97,16 +103,17 @@ class CacheService:
                 logger.error(f"从Redis获取缓存失败: {e}")
                 return None
         else:
-            # 内存缓存
-            if key in self.memory_cache:
-                cache_item = self.memory_cache[key]
-                # 检查是否过期
-                if datetime.now() < cache_item.get("expires_at", datetime.max):
-                    return cache_item.get("value")
-                else:
-                    # 已过期，删除
-                    del self.memory_cache[key]
-            return None
+            # 内存缓存（线程安全）
+            with self._cache_lock:
+                if key in self.memory_cache:
+                    cache_item = self.memory_cache[key]
+                    # 检查是否过期
+                    if datetime.now() < cache_item.get("expires_at", datetime.max):
+                        return cache_item.get("value")
+                    else:
+                        # 已过期，删除
+                        del self.memory_cache[key]
+                return None
     
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
         """
@@ -134,20 +141,21 @@ class CacheService:
                 logger.error(f"设置Redis缓存失败: {e}")
                 return False
         else:
-            # 内存缓存
-            expires_at = datetime.now() + timedelta(seconds=ttl)
-            self.memory_cache[key] = {
-                "value": value,
-                "expires_at": expires_at
-            }
-            # 限制内存缓存大小（最多保留1000个键）
-            if len(self.memory_cache) > 1000:
-                # 删除最旧的缓存项
-                oldest_key = min(
-                    self.memory_cache.keys(),
-                    key=lambda k: self.memory_cache[k].get("expires_at", datetime.min)
-                )
-                del self.memory_cache[oldest_key]
+            # 内存缓存（线程安全）
+            with self._cache_lock:
+                expires_at = datetime.now() + timedelta(seconds=ttl)
+                self.memory_cache[key] = {
+                    "value": value,
+                    "expires_at": expires_at
+                }
+                # 限制内存缓存大小（最多保留1000个键）
+                if len(self.memory_cache) > 1000:
+                    # 删除最旧的缓存项
+                    oldest_key = min(
+                        self.memory_cache.keys(),
+                        key=lambda k: self.memory_cache[k].get("expires_at", datetime.min)
+                    )
+                    del self.memory_cache[oldest_key]
             return True
     
     def delete(self, key: str) -> bool:
@@ -168,8 +176,10 @@ class CacheService:
                 logger.error(f"删除Redis缓存失败: {e}")
                 return False
         else:
-            if key in self.memory_cache:
-                del self.memory_cache[key]
+            # 内存缓存（线程安全）
+            with self._cache_lock:
+                if key in self.memory_cache:
+                    del self.memory_cache[key]
             return True
     
     def clear(self, pattern: Optional[str] = None) -> int:
@@ -205,9 +215,49 @@ class CacheService:
                     count += 1
                 return count
             else:
-                count = len(self.memory_cache)
-                self.memory_cache.clear()
+                # 内存缓存（线程安全）
+                with self._cache_lock:
+                    count = len(self.memory_cache)
+                    self.memory_cache.clear()
                 return count
+    
+    def _cleanup_expired(self):
+        """
+        清理过期的缓存项（内部方法）
+        """
+        if self.redis_client is not None:
+            return  # Redis自动处理过期
+        
+        with self._cache_lock:
+            now = datetime.now()
+            expired_keys = [
+                key for key, item in self.memory_cache.items()
+                if now >= item.get("expires_at", datetime.max)
+            ]
+            for key in expired_keys:
+                del self.memory_cache[key]
+            
+            if expired_keys:
+                logger.debug(f"清理了 {len(expired_keys)} 个过期缓存项")
+    
+    def _start_cleanup_task(self):
+        """
+        启动定期清理任务（仅用于内存缓存）
+        """
+        def cleanup_worker():
+            """后台清理工作线程"""
+            import time
+            while True:
+                try:
+                    time.sleep(300)  # 每5分钟清理一次
+                    self._cleanup_expired()
+                except Exception as e:
+                    logger.error(f"清理过期缓存时出错: {e}")
+        
+        # 启动后台线程
+        cleanup_thread = threading.Thread(target=cleanup_worker, daemon=True, name="CacheCleanup")
+        cleanup_thread.start()
+        logger.debug("已启动内存缓存定期清理任务（每5分钟）")
 
 
 # 全局缓存服务实例（延迟初始化）

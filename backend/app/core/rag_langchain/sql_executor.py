@@ -3,7 +3,8 @@ SQL执行服务
 复用interface_executor的逻辑，提供SQL执行、结果处理、性能优化、安全控制
 """
 import time
-from typing import Dict, Any, List, Optional
+import re
+from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 from loguru import logger
@@ -12,6 +13,7 @@ from app.models import DatabaseConfig
 from app.core.db_factory import DatabaseConnectionFactory
 from app.core.sql_dialect import SQLDialectFactory
 from app.core.data_masking import DataMaskingService
+from app.core.log_sanitizer import safe_log_sql
 
 
 class SQLExecutor:
@@ -51,6 +53,25 @@ class SQLExecutor:
         
         Args:
             sql: SQL语句
+            params: 参数化查询参数（可选）
+            user_id: 用户ID（可选，用于审计）
+            client_ip: 客户端IP（可选，用于审计）
+            
+        Returns:
+            执行结果字典，包含：
+            - success: 是否成功
+            - data: 查询结果数据（列表）
+            - row_count: 返回行数
+            - total_rows: 实际查询到的行数
+            - columns: 列名列表
+            - execution_time: 执行时间（秒）
+            - error: 错误信息（如果失败）
+        """
+        """
+        执行SQL查询
+        
+        Args:
+            sql: SQL语句
             params: 参数化查询参数
             user_id: 用户ID（用于审计）
             client_ip: 客户端IP（用于审计）
@@ -64,31 +85,42 @@ class SQLExecutor:
         self._validate_sql_safety(sql)
         
         # 2. 权限验证
-        # TODO: 实现查询权限验证
+        # 注意：查询权限验证功能待实现
+        # 计划：基于用户角色和数据库配置的权限表进行验证
+        # 当前：所有通过安全验证的查询都允许执行
         
         # 3. 执行SQL
+        engine = None
+        db = None
         try:
             engine = DatabaseConnectionFactory.create_engine(self.db_config)
             adapter = SQLDialectFactory.get_adapter(self.db_type)
             
-            # 设置超时
-            if self.db_type == "mysql":
-                with engine.connect() as conn:
-                    conn.execute(text(f"SET SESSION max_execution_time = {self.timeout * 1000}"))
-            
+            # 设置超时（在会话级别设置，而不是连接级别）
             SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
             db = SessionLocal()
+            
+            # 在会话级别设置MySQL超时
+            if self.db_type == "mysql":
+                try:
+                    db.execute(text(f"SET SESSION max_execution_time = {self.timeout * 1000}"))
+                except Exception as timeout_error:
+                    logger.warning(f"设置MySQL超时失败: {timeout_error}")
             
             try:
                 # 参数化查询（防止SQL注入）
                 if params:
-                    # 使用参数化查询
-                    formatted_sql = self._parameterize_sql(sql, params, adapter)
+                    # 使用参数化查询，返回SQL和参数字典
+                    formatted_sql, query_params = self._parameterize_sql(sql, params, adapter)
                 else:
                     formatted_sql = sql
+                    query_params = {}
                 
-                # 执行查询
-                result = db.execute(text(formatted_sql))
+                # 执行查询 - 使用SQLAlchemy的参数绑定机制
+                if query_params:
+                    result = db.execute(text(formatted_sql), query_params)
+                else:
+                    result = db.execute(text(formatted_sql))
                 rows = result.fetchall()
                 columns = result.keys()
                 
@@ -110,8 +142,12 @@ class SQLExecutor:
                 }
                 
             finally:
-                db.close()
-                engine.dispose()
+                # 关闭数据库会话
+                if db is not None:
+                    try:
+                        db.close()
+                    except Exception as close_error:
+                        logger.warning(f"关闭数据库会话时出错: {close_error}")
                 
         except Exception as e:
             elapsed_time = time.time() - start_time
@@ -128,6 +164,11 @@ class SQLExecutor:
                 "row_count": 0,
                 "execution_time": elapsed_time
             }
+        finally:
+            # 注意：这里不dispose引擎，因为引擎应该被缓存和复用
+            # 引擎的清理应该由引擎缓存机制管理（见问题#9）
+            # 如果确实需要dispose，应该在引擎缓存中实现
+            pass
     
     def _validate_sql_safety(self, sql: str):
         """
@@ -185,7 +226,7 @@ class SQLExecutor:
             if re.search(pattern, sql_upper, re.IGNORECASE):
                 raise ValueError("检测到潜在的SQL注入攻击")
     
-    def _parameterize_sql(self, sql: str, params: Dict[str, Any], adapter) -> str:
+    def _parameterize_sql(self, sql: str, params: Dict[str, Any], adapter) -> Tuple[str, Dict[str, Any]]:
         """
         参数化SQL（防止SQL注入）
         
@@ -195,26 +236,19 @@ class SQLExecutor:
             adapter: SQL方言适配器
             
         Returns:
-            参数化后的SQL
+            (SQL语句, 参数字典) 元组，用于SQLAlchemy的参数化查询
         """
-        # 如果SQL已经包含参数占位符（:param_name），直接使用
+        # 如果SQL已经包含参数占位符（:param_name），直接使用参数化查询
         if ':' in sql:
-            # SQLAlchemy的参数化查询
-            return sql
+            # 检查SQL中的占位符，只保留实际存在的参数
+            placeholder_pattern = r':(\w+)'
+            placeholders_in_sql = re.findall(placeholder_pattern, sql)
+            # 只返回SQL中实际使用的参数
+            filtered_params = {k: v for k, v in params.items() if k in placeholders_in_sql}
+            return sql, filtered_params
         
-        # 否则，替换参数值（需要根据数据库类型转义）
-        formatted_sql = sql
-        for key, value in params.items():
-            # 转义特殊字符
-            if isinstance(value, str):
-                escaped_value = value.replace("'", "''")
-                formatted_sql = formatted_sql.replace(f":{key}", f"'{escaped_value}'")
-            elif value is None:
-                formatted_sql = formatted_sql.replace(f":{key}", "NULL")
-            else:
-                formatted_sql = formatted_sql.replace(f":{key}", str(value))
-        
-        return formatted_sql
+        # 如果SQL中没有占位符，返回原始SQL和空参数字典
+        return sql, {}
     
     def _process_results(
         self,
@@ -291,7 +325,7 @@ class SQLExecutor:
             error: 错误信息（如果有）
         """
         log_data = {
-            "sql": sql[:200],  # 只记录前200字符
+            "sql": safe_log_sql(sql, 200),  # 脱敏后记录前200字符
             "user_id": user_id,
             "client_ip": client_ip,
             "execution_time": execution_time,
@@ -305,7 +339,9 @@ class SQLExecutor:
         else:
             logger.info(f"SQL查询审计: {log_data}")
         
-        # TODO: 可以保存到数据库的审计日志表
+        # 注意：审计日志保存到数据库功能待实现
+        # 计划：创建audit_logs表，记录所有SQL查询的审计信息
+        # 当前：仅记录到日志文件
     
     def execute_with_pagination(
         self,

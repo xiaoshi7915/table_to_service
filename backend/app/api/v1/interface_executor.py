@@ -11,6 +11,9 @@ from app.schemas import ResponseModel
 from app.core.security import get_current_active_user, get_current_user
 from app.core.db_factory import DatabaseConnectionFactory
 from app.core.sql_dialect import SQLDialectFactory
+from app.core.log_sanitizer import safe_log_sql, safe_log_params
+from app.core.exceptions import NotFoundError, SQLExecutionError, ValidationError
+from app.core.sql_utils import process_sql_params, execute_sql_query, convert_rows_to_dicts
 from loguru import logger
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
@@ -22,13 +25,19 @@ router = APIRouter(prefix="/api/v1/interfaces", tags=["接口执行"])
 
 
 def check_rate_limit(interface_config: InterfaceConfig, client_ip: str) -> bool:
-    """检查限流（简单实现，实际应该使用Redis等）"""
+    """
+    检查限流
+    
+    注意：当前为简单实现，仅记录日志
+    计划：使用Redis实现基于令牌桶或滑动窗口的限流算法
+    当前：所有请求都通过限流检查
+    """
     if not interface_config.enable_rate_limit:
         return True
     
-    # TODO: 实际应该使用Redis实现限流
-    # 这里简单返回True，表示通过限流检查
-    logger.info("接口 {} 启用限流，客户端IP: {}", interface_config.id, client_ip)
+    # 简单实现：仅记录日志，实际应该使用Redis实现限流
+    # 可以使用Redis的INCR和EXPIRE实现滑动窗口限流
+    logger.info("接口 {} 启用限流，客户端IP: {} (当前为简单实现，未实际限流)", interface_config.id, client_ip)
     return True
 
 
@@ -136,7 +145,7 @@ def audit_log(
             resource_type="interface",
             resource_id=interface_config.id,
             details=json.dumps(details, ensure_ascii=False, default=str),
-            sql_statement=sql_statement[:1000] if sql_statement else None,  # 限制长度
+            sql_statement=safe_log_sql(sql_statement, 1000) if sql_statement else None,  # 脱敏并限制长度
             execution_time=execution_time,
             row_count=row_count,
             success=success,
@@ -185,7 +194,33 @@ def execute_interface_sql(
 ) -> Dict[str, Any]:
     """
     执行接口SQL
+    
+    Args:
+        interface_config: 接口配置对象
+        db_config: 数据库配置对象
+        params: 参数字典
+        page: 页码（可选）
+        page_size: 每页大小（可选）
+        client_ip: 客户端IP（可选，用于审计）
+        user_id: 用户ID（可选，用于审计）
+        
+    Returns:
+        执行结果字典，包含success、data、row_count等字段
+        
+    Raises:
+        ValidationError: 参数验证失败
+        SQLExecutionError: SQL执行失败
     """
+    """
+    执行接口SQL
+    """
+    # 初始化变量，确保在异常处理中可用
+    engine = None
+    db = None
+    sql = None
+    start_time = None
+    query_params = {}
+    
     try:
         # 获取SQL方言适配器
         db_type = db_config.db_type or "mysql"
@@ -208,56 +243,13 @@ def execute_interface_sql(
                 sql = interface_config.sql_statement
             
             if not sql:
-                raise ValueError("SQL语句为空")
+                raise ValidationError("SQL语句为空", "接口配置的SQL语句不能为空")
 
-            # 专家模式或问数模式：使用参数化查询（防止SQL注入）
-            # 注意：这里使用text()和参数绑定，但需要确保SQL语句中的参数使用:param_name格式
-            # 如果SQL中已经使用了:param_name格式，SQLAlchemy会自动处理参数绑定
-            # 但为了兼容性，我们仍然需要处理字符串替换（已转义）
+            # 专家模式或问数模式：使用真正的参数化查询（防止SQL注入）
+            # 使用公共函数处理SQL参数
+            query_params = {}
             if interface_config.entry_mode in ["expert", "query"]:
-                # 转义单引号防止SQL注入
-                def escape_sql_string(value):
-                    """转义SQL字符串值，防止SQL注入"""
-                    if isinstance(value, str):
-                        # 转义单引号：' -> ''
-                        escaped = value.replace("'", "''")
-                        # 转义反斜杠：\ -> \\
-                        escaped = escaped.replace("\\", "\\\\")
-                        return escaped
-                    return str(value)
-                
-                # 检查SQL中是否有未替换的占位符
-                placeholder_pattern = r':(\w+)'
-                placeholders_in_sql = re.findall(placeholder_pattern, sql)
-
-                # 宽松模式：如果参数缺失，将对应的WHERE条件移除
-                # 例如：WHERE province = :province AND city = :city
-                # 如果province缺失，则变为：WHERE city = :city
-                # 如果所有参数都缺失，则移除整个WHERE子句
-                missing_params = [p for p in placeholders_in_sql if p not in params]
-                if missing_params:
-                    # 移除缺失参数对应的WHERE条件
-                    # 使用正则表达式匹配并移除包含缺失参数的WHERE条件
-                    for missing_param in missing_params:
-                        # 匹配模式：AND/OR param = :param 或 WHERE param = :param
-                        placeholder_pattern = rf'(?:\s+(?:AND|OR)\s+|\s+WHERE\s+){re.escape(missing_param)}\s*=\s*:{re.escape(missing_param)}'
-                        sql = re.sub(placeholder_pattern, '', sql, flags=re.IGNORECASE)
-                        # 清理可能出现的多余空格和AND/OR
-                        sql = re.sub(r'\s+AND\s+AND', ' AND', sql, flags=re.IGNORECASE)
-                        sql = re.sub(r'\s+OR\s+OR', ' OR', sql, flags=re.IGNORECASE)
-                        sql = re.sub(r'WHERE\s+AND', 'WHERE', sql, flags=re.IGNORECASE)
-                        sql = re.sub(r'WHERE\s+OR', 'WHERE', sql, flags=re.IGNORECASE)
-                
-                # 替换占位符
-                for key, value in params.items():
-                    placeholder = f":{key}"
-                    if placeholder in sql:
-                        # 对于字符串值，转义后加引号
-                        if isinstance(value, str):
-                            escaped_value = escape_sql_string(value)
-                            sql = sql.replace(placeholder, f"'{escaped_value}'")
-                        else:
-                            sql = sql.replace(placeholder, str(value))
+                sql, query_params = process_sql_params(sql, params, interface_config.entry_mode)
             
             # 检查最大查询数量限制（仅在非分页模式下应用）
             if not interface_config.enable_pagination and interface_config.max_query_count:
@@ -317,55 +309,19 @@ def execute_interface_sql(
             # 记录执行开始时间
             start_time = time.time()
             
-            # 执行查询
-            # 检查SQL中是否还有未替换的占位符（:param格式）
+            # 执行查询 - 使用参数化查询防止SQL注入
+            # 检查SQL中是否还有未提供的占位符
             remaining_placeholders = re.findall(r':(\w+)', sql)
             if remaining_placeholders:
-                raise ValueError(f"SQL查询包含未替换的参数占位符: {', '.join(remaining_placeholders)}。请提供这些参数的值。")
+                raise ValidationError(
+                    f"SQL查询包含未提供的参数占位符: {', '.join(remaining_placeholders)}",
+                    f"请提供以下参数的值: {', '.join(remaining_placeholders)}",
+                    errors=[{"param": p, "message": f"缺少必需参数: {p}"} for p in remaining_placeholders]
+                )
             
-            result = db.execute(text(sql))
-            rows = result.fetchall()
-            
-            # 转换为字典列表，处理特殊类型（datetime, decimal, UUID等）
-            columns = result.keys()
-            data = []
-            for row in rows:
-                row_dict = {}
-                for col, val in zip(columns, row):
-                    # 处理None
-                    if val is None:
-                        row_dict[col] = None
-                    # 处理datetime类型
-                    elif hasattr(val, 'isoformat'):
-                        row_dict[col] = val.isoformat()
-                    # 处理UUID类型（PostgreSQL等）
-                    elif hasattr(val, '__class__') and 'UUID' in str(type(val)):
-                        row_dict[col] = str(val)
-                    # 处理decimal类型
-                    elif hasattr(val, '__float__'):
-                        try:
-                            row_dict[col] = float(val)
-                        except (ValueError, TypeError):
-                            row_dict[col] = str(val)
-                    # 处理bytes类型（PostgreSQL bytea等）
-                    elif isinstance(val, bytes):
-                        try:
-                            # 尝试解码为UTF-8字符串
-                            row_dict[col] = val.decode('utf-8')
-                        except:
-                            # 如果解码失败，转换为base64
-                            import base64
-                            row_dict[col] = base64.b64encode(val).decode('utf-8')
-                    # 其他类型转换为字符串（确保可序列化）
-                    else:
-                        try:
-                            # 尝试直接使用
-                            json.dumps(val)  # 测试是否可序列化
-                            row_dict[col] = val
-                        except (TypeError, ValueError):
-                            # 如果不可序列化，转换为字符串
-                            row_dict[col] = str(val)
-                data.append(row_dict)
+            # 使用公共函数执行SQL查询和转换结果
+            rows, columns = execute_sql_query(db, sql, query_params)
+            data = convert_rows_to_dicts(rows, columns)
             
             # 注意：如果启用了分页，分页已经在SQL执行前完成（第221-248行）
             # data已经是分页后的结果，不需要再次分页
@@ -433,12 +389,12 @@ def execute_interface_sql(
                     user_id=user_id,
                     action="execute_sql",
                     details={
-                        "sql_preview": sql[:200] if sql else None,
-                        "params": params,
+                        "sql_preview": safe_log_sql(sql, 200) if sql else None,
+                        "params": safe_log_params(params),
                         "page": page,
                         "page_size": page_size
                     },
-                    sql_statement=sql[:1000] if sql else None,
+                    sql_statement=safe_log_sql(sql, 1000) if sql else None,
                     execution_time=execution_time,
                     row_count=row_count,
                     success=True
@@ -446,26 +402,35 @@ def execute_interface_sql(
             
             return result
         finally:
-            db.close()
-            engine.dispose()
+            # 确保数据库会话和引擎正确关闭
+            if db is not None:
+                try:
+                    db.close()
+                except Exception as close_error:
+                    logger.warning(f"关闭数据库会话时出错: {close_error}")
+            if engine is not None:
+                try:
+                    engine.dispose()
+                except Exception as dispose_error:
+                    logger.warning(f"释放数据库引擎时出错: {dispose_error}")
     except Exception as e:
         logger.error("执行接口SQL失败: {}", e, exc_info=True)
         
         # 记录审计日志（执行失败）
         if client_ip and interface_config:
             try:
-                execution_time = time.time() - start_time if 'start_time' in locals() else None
+                execution_time = time.time() - start_time if start_time is not None else None
                 audit_log(
-                    db=db if 'db' in locals() else None,
+                    db=db,  # 可能为None，audit_log应该处理
                     interface_config=interface_config,
                     client_ip=client_ip,
                     user_id=user_id,
                     action="execute_sql",
                     details={
                         "error": str(e),
-                        "params": params if 'params' in locals() else {}
+                        "params": safe_log_params(params)
                     },
-                    sql_statement=sql[:1000] if 'sql' in locals() and sql else None,
+                    sql_statement=safe_log_sql(sql, 1000) if sql else None,
                     execution_time=execution_time,
                     row_count=0,
                     success=False,
@@ -475,6 +440,18 @@ def execute_interface_sql(
                 logger.error(f"记录失败审计日志时出错: {log_error}")
         
         raise
+    finally:
+        # 最终清理：确保资源释放
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                pass
+        if engine is not None:
+            try:
+                engine.dispose()
+            except Exception:
+                pass
 
 
 def build_sql_from_graphical_config(

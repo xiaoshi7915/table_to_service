@@ -2,10 +2,11 @@
 数据库连接工厂
 支持多种数据库类型的连接创建和URL生成
 """
-from sqlalchemy import create_engine, Engine
+from sqlalchemy import create_engine, Engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from urllib.parse import quote_plus
 from typing import Optional, Dict, Any
+import threading
 from app.models import DatabaseConfig
 from app.core.password_encryption import decrypt_password
 from loguru import logger
@@ -22,6 +23,32 @@ class DatabaseConnectionFactory:
         "sqlserver": {"default_port": 1433, "driver": "pyodbc"},
         "oracle": {"default_port": 1521, "driver": "cx_oracle"},
     }
+    
+    # 引擎缓存（线程安全）
+    _engine_cache: Dict[str, Engine] = {}
+    _cache_lock = threading.Lock()
+    
+    @classmethod
+    def _get_cache_key(cls, db_config: DatabaseConfig) -> str:
+        """
+        生成缓存键（基于数据库配置的唯一标识）
+        
+        Args:
+            db_config: 数据库配置对象
+            
+        Returns:
+            缓存键字符串
+        """
+        # 使用配置ID和连接URL的组合作为缓存键
+        # 如果配置ID存在，使用ID；否则使用连接URL的哈希
+        if hasattr(db_config, 'id') and db_config.id:
+            return f"db_config_{db_config.id}"
+        else:
+            # 使用连接URL作为缓存键
+            db_url = cls.get_connection_url(db_config)
+            import hashlib
+            url_hash = hashlib.md5(db_url.encode('utf-8')).hexdigest()
+            return f"db_url_{url_hash}"
     
     @classmethod
     def get_connection_url(cls, db_config: DatabaseConfig) -> str:
@@ -108,7 +135,7 @@ class DatabaseConnectionFactory:
     @classmethod
     def create_engine(cls, db_config: DatabaseConfig, **engine_kwargs) -> Engine:
         """
-        根据数据库配置创建SQLAlchemy引擎
+        根据数据库配置创建SQLAlchemy引擎（带缓存机制）
         
         Args:
             db_config: 数据库配置对象
@@ -117,6 +144,30 @@ class DatabaseConnectionFactory:
         Returns:
             SQLAlchemy引擎对象
         """
+        # 生成缓存键
+        cache_key = cls._get_cache_key(db_config)
+        
+        # 检查缓存
+        with cls._cache_lock:
+            if cache_key in cls._engine_cache:
+                cached_engine = cls._engine_cache[cache_key]
+                # 验证引擎是否仍然有效
+                try:
+                    # 尝试连接以验证引擎是否有效
+                    with cached_engine.connect() as conn:
+                        conn.execute(text("SELECT 1"))
+                    logger.debug(f"使用缓存的数据库引擎: {cache_key}")
+                    return cached_engine
+                except Exception as e:
+                    # 引擎无效，从缓存中移除
+                    logger.warning(f"缓存的引擎无效，将重新创建: {e}")
+                    try:
+                        cached_engine.dispose()
+                    except Exception:
+                        pass
+                    del cls._engine_cache[cache_key]
+        
+        # 缓存未命中或引擎无效，创建新引擎
         db_url = cls.get_connection_url(db_config)
         db_type = (db_config.db_type or "mysql").lower()
         
@@ -127,11 +178,18 @@ class DatabaseConnectionFactory:
             "echo": False,            # 不打印SQL语句
         }
         
+        # 从配置中获取连接池参数（如果可用）
+        from app.core.config import settings
+        default_pool_size = getattr(settings, 'DB_POOL_SIZE', 10)
+        default_max_overflow = getattr(settings, 'DB_MAX_OVERFLOW', 20)
+        default_pool_recycle = getattr(settings, 'DB_POOL_RECYCLE', 3600)
+        
         # 根据数据库类型设置特定参数
         if db_type == "mysql":
             default_kwargs.update({
-                "pool_size": 10,
-                "max_overflow": 20,
+                "pool_size": default_pool_size,
+                "max_overflow": default_max_overflow,
+                "pool_recycle": default_pool_recycle,
                 "connect_args": {
                     "connect_timeout": 15,
                     "read_timeout": 30,
@@ -140,8 +198,9 @@ class DatabaseConnectionFactory:
             })
         elif db_type == "postgresql":
             default_kwargs.update({
-                "pool_size": 10,
-                "max_overflow": 20,
+                "pool_size": default_pool_size,
+                "max_overflow": default_max_overflow,
+                "pool_recycle": default_pool_recycle,
                 "connect_args": {
                     "connect_timeout": 10,
                 }
@@ -156,13 +215,15 @@ class DatabaseConnectionFactory:
             })
         elif db_type == "sqlserver":
             default_kwargs.update({
-                "pool_size": 10,
-                "max_overflow": 20,
+                "pool_size": default_pool_size,
+                "max_overflow": default_max_overflow,
+                "pool_recycle": default_pool_recycle,
             })
         elif db_type == "oracle":
             default_kwargs.update({
-                "pool_size": 10,
-                "max_overflow": 20,
+                "pool_size": default_pool_size,
+                "max_overflow": default_max_overflow,
+                "pool_recycle": default_pool_recycle,
             })
         
         # 合并用户提供的参数
@@ -171,10 +232,56 @@ class DatabaseConnectionFactory:
         try:
             engine = create_engine(db_url, **default_kwargs)
             logger.debug(f"创建数据库引擎成功: {db_type} - {db_config.name}")
+            
+            # 缓存引擎
+            with cls._cache_lock:
+                cls._engine_cache[cache_key] = engine
+                logger.debug(f"数据库引擎已缓存: {cache_key} (当前缓存数量: {len(cls._engine_cache)})")
+            
             return engine
         except Exception as e:
             logger.error(f"创建数据库引擎失败: {db_type} - {db_config.name} - {e}", exc_info=True)
             raise
+    
+    @classmethod
+    def clear_engine_cache(cls, db_config: Optional[DatabaseConfig] = None):
+        """
+        清理引擎缓存
+        
+        Args:
+            db_config: 如果提供，只清理该配置的引擎；否则清理所有引擎
+        """
+        with cls._cache_lock:
+            if db_config:
+                cache_key = cls._get_cache_key(db_config)
+                if cache_key in cls._engine_cache:
+                    try:
+                        cls._engine_cache[cache_key].dispose()
+                    except Exception as e:
+                        logger.warning(f"释放引擎时出错: {e}")
+                    del cls._engine_cache[cache_key]
+                    logger.info(f"已清理数据库引擎缓存: {cache_key}")
+            else:
+                # 清理所有引擎
+                count = len(cls._engine_cache)
+                for engine in cls._engine_cache.values():
+                    try:
+                        engine.dispose()
+                    except Exception:
+                        pass
+                cls._engine_cache.clear()
+                logger.info(f"已清理所有数据库引擎缓存 (共 {count} 个)")
+    
+    @classmethod
+    def get_cache_size(cls) -> int:
+        """
+        获取当前缓存的引擎数量
+        
+        Returns:
+            缓存的引擎数量
+        """
+        with cls._cache_lock:
+            return len(cls._engine_cache)
     
     @classmethod
     def create_session(cls, db_config: DatabaseConfig, **engine_kwargs) -> Session:

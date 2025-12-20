@@ -3,6 +3,8 @@ LLM适配器
 将我们的LLM客户端适配为LangChain兼容格式
 """
 from typing import Any, List, Optional
+import json
+import time
 try:
     # LangChain 1.x
     from langchain_core.language_models import BaseLanguageModel
@@ -99,7 +101,7 @@ class LangChainLLMAdapter(BaseLanguageModel):
                 generations.append([Generation(text=content)])
                 
             except Exception as e:
-                logger.error(f"LLM生成失败: {e}", exc_info=True)
+                logger.error("LLM生成失败: %s", str(e), exc_info=True)
                 generations.append([Generation(text=f"生成失败: {str(e)}")])
         
         return LLMResult(generations=generations)
@@ -108,6 +110,7 @@ class LangChainLLMAdapter(BaseLanguageModel):
         """同步调用（降级方案）"""
         llm_client = getattr(self, '_llm_client', None)
         if not llm_client:
+            logger.warning("LLM客户端未初始化")
             return {"content": "LLM客户端未初始化"}
         
         try:
@@ -117,15 +120,33 @@ class LangChainLLMAdapter(BaseLanguageModel):
                 loop = asyncio.get_running_loop()
                 # 如果有运行中的循环，需要在新线程中运行
                 import concurrent.futures
+                
+                def run_llm_call():
+                    """在新线程中运行LLM调用"""
+                    return asyncio.run(llm_client.chat_completion(messages))
+                
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, llm_client.chat_completion(messages))
-                    return future.result(timeout=30)
+                    future = executor.submit(run_llm_call)
+                    try:
+                        result = future.result(timeout=30)
+                        return result
+                    except Exception as future_exc:
+                        # 重新抛出异常，让外层处理
+                        raise
             except RuntimeError:
                 # 没有运行中的循环，直接使用asyncio.run
-                return asyncio.run(llm_client.chat_completion(messages))
+                result = asyncio.run(llm_client.chat_completion(messages))
+                return result
         except Exception as e:
-            logger.error(f"LLM同步调用失败: {e}", exc_info=True)
-            return {"content": f"LLM调用失败: {str(e)}"}
+            # 使用 %s 格式化避免 loguru 解析错误消息中的占位符
+            logger.error("LLM同步调用失败: %s", str(e), exc_info=True)
+            # 提取更友好的错误信息
+            error_msg = str(e)
+            if "Authentication" in error_msg or "401" in error_msg or "invalid" in error_msg.lower():
+                error_msg = "API密钥无效或已过期，请检查AI模型配置"
+            elif "timeout" in error_msg.lower():
+                error_msg = "LLM调用超时，请稍后重试"
+            return {"content": f"LLM调用失败: {error_msg}"}
     
     async def _agenerate(
         self,
@@ -169,7 +190,7 @@ class LangChainLLMAdapter(BaseLanguageModel):
                 generations.append([Generation(text=content)])
                 
             except Exception as e:
-                logger.error(f"LLM异步生成失败: {e}", exc_info=True)
+                logger.error("LLM异步生成失败: %s", str(e), exc_info=True)
                 generations.append([Generation(text=f"生成失败: {str(e)}")])
         
         return LLMResult(generations=generations)
@@ -232,7 +253,7 @@ class LangChainLLMAdapter(BaseLanguageModel):
                     )
             except RuntimeError:
                 response = asyncio.run(
-                    self.llm_client.chat_completion(messages)
+                    llm_client.chat_completion(messages)
                 )
             
             if isinstance(response, dict):
@@ -243,7 +264,7 @@ class LangChainLLMAdapter(BaseLanguageModel):
             return AIMessage(content=content)
             
         except Exception as e:
-            logger.error(f"invoke失败: {e}", exc_info=True)
+            logger.error("invoke失败: %s", str(e), exc_info=True)
             return AIMessage(content=f"调用失败: {str(e)}")
 
 

@@ -43,7 +43,7 @@ class LLMFactory:
         try:
             api_key = decrypt_password(model_config.api_key)
         except Exception as e:
-            logger.error(f"解密API密钥失败: {e}")
+            logger.error("解密API密钥失败: %s", str(e))
             # 如果解密失败，尝试直接使用（可能是明文存储）
             api_key = model_config.api_key
         

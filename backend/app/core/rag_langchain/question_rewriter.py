@@ -146,7 +146,8 @@ class QuestionRewriter:
     def _rewrite_with_rules(
         self,
         question: str,
-        context: Optional[Dict[str, Any]] = None
+        context: Optional[Dict[str, Any]] = None,
+        warnings: Optional[list] = None
     ) -> Dict[str, Any]:
         """
         使用规则引擎改写问题
@@ -154,6 +155,7 @@ class QuestionRewriter:
         Args:
             question: 原始问题
             context: 上下文信息
+            warnings: 警告信息列表（可选）
             
         Returns:
             改写结果
@@ -161,6 +163,8 @@ class QuestionRewriter:
         original_question = question
         rewritten_question = question
         changes = []
+        if warnings is None:
+            warnings = []
         
         # 1. 规范化常见表述
         replacements = {

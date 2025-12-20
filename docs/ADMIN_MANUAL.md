@@ -43,12 +43,6 @@
 编辑 `.env` 文件，配置以下参数：
 
 ```bash
-# 数据库配置
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=root
-DB_PASSWORD=your_password
-DB_NAME=test_db
 
 # 本地数据库配置（服务自身数据存储）
 LOCAL_DB_HOST=localhost

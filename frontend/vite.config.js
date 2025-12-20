@@ -4,6 +4,7 @@ import { resolve } from 'path'
 
 export default defineConfig({
   plugins: [vue()],
+  base: '/',
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src')
@@ -12,6 +13,9 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',  // 允许外部访问
     port: 3003,
+    hmr: {
+      clientPort: 3003
+    },
     proxy: {
       '/api': {
         target: 'http://localhost:8300',

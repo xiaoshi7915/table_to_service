@@ -35,7 +35,7 @@ class QwenClient(BaseLLMClient):
         
         # 如果模型名称不在支持列表中，使用默认模型
         if model_name not in self.supported_models:
-            logger.warning(f"模型 {model_name} 可能不受支持，使用默认模型 qwen-turbo")
+            logger.warning("模型 %s 可能不受支持，使用默认模型 qwen-turbo", model_name)
             self.model_name = "qwen-turbo"
     
     async def chat_completion(
@@ -94,7 +94,8 @@ class QwenClient(BaseLLMClient):
             }
             
         except Exception as e:
-            logger.error(f"通义千问API调用失败: {e}", exc_info=True)
+            # 使用 %s 格式化避免 loguru 解析错误消息中的 {error} 等占位符
+            logger.error("通义千问API调用失败: %s", str(e), exc_info=True)
             raise ValueError(f"通义千问API调用失败: {str(e)}")
     
     def count_tokens(self, text: str) -> int:

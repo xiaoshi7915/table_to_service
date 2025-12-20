@@ -569,7 +569,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, watch, h } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, watch, h } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as echarts from 'echarts'
 import { Plus, Delete, DocumentCopy, Download, Loading, DataBoard, Edit, ChatLineRound, Connection, Grid } from '@element-plus/icons-vue'
@@ -1855,6 +1855,22 @@ const renderChart = (message) => {
   chart.setOption(option, true) // 使用true强制重新渲染
   chartInstances.value[chartId] = chart
   
+  // 添加窗口resize监听器（如果还没有）
+  if (!window.chartResizeHandler) {
+    window.chartResizeHandler = () => {
+      Object.values(chartInstances.value).forEach(chart => {
+        try {
+          if (chart && !chart.isDisposed()) {
+            chart.resize()
+          }
+        } catch (error) {
+          // 忽略已销毁的图表
+        }
+      })
+    }
+    window.addEventListener('resize', window.chartResizeHandler)
+  }
+  
   // 监听窗口大小变化，自动调整图表大小
   const resizeHandler = () => {
     if (chartInstances.value[chartId]) {
@@ -2065,6 +2081,27 @@ const confirmRetrySQL = async () => {
     retryingSQL.value = false
   }
 }
+
+// 清理资源
+onUnmounted(() => {
+  // 清理所有图表实例
+  Object.keys(chartInstances.value).forEach(chartId => {
+    try {
+      if (chartInstances.value[chartId]) {
+        chartInstances.value[chartId].dispose()
+      }
+    } catch (error) {
+      console.warn(`清理图表实例失败: ${chartId}`, error)
+    }
+  })
+  chartInstances.value = {}
+  
+  // 清理窗口resize监听器（如果有）
+  if (window.chartResizeHandler) {
+    window.removeEventListener('resize', window.chartResizeHandler)
+    delete window.chartResizeHandler
+  }
+})
 
 onMounted(async () => {
   await loadSessions()

@@ -7,7 +7,6 @@ from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
-from pydantic import BaseModel
 from loguru import logger
 from datetime import datetime
 import json
@@ -851,10 +850,20 @@ async def send_message(
         
         if vector_manager:
             try:
-                # 从数据库加载文档用于BM25检索
-                terminologies = db.query(Terminology).all()
-                sql_examples = db.query(SQLExample).all()
-                knowledge_items = db.query(BusinessKnowledge).all()
+                # 并行加载文档用于BM25检索（优化性能）
+                import asyncio
+                try:
+                    # 尝试并行查询（如果数据库支持）
+                    terminologies, sql_examples, knowledge_items = await asyncio.gather(
+                        asyncio.to_thread(db.query(Terminology).all),
+                        asyncio.to_thread(db.query(SQLExample).all),
+                        asyncio.to_thread(db.query(BusinessKnowledge).all)
+                    )
+                except Exception:
+                    # 降级到串行查询
+                    terminologies = db.query(Terminology).all()
+                    sql_examples = db.query(SQLExample).all()
+                    knowledge_items = db.query(BusinessKnowledge).all()
                 
                 # 转换为LangChain Document
                 term_docs = [
@@ -980,7 +989,7 @@ async def send_message(
             # 生成推荐问题
             recommended_questions = []
             try:
-                recommended_questions = generate_dynamic_recommendations(
+                recommended_questions = await generate_dynamic_recommendations(
                     session_id=session_id,
                     current_question=request.question,
                     sql=final_sql,
@@ -1142,7 +1151,7 @@ SQL执行失败，错误信息：{execution_error or error}
             # 即使有错误，也生成推荐问题（基于当前上下文、数据源和选择的表）
             recommended_questions = []
             try:
-                recommended_questions = generate_dynamic_recommendations(
+                recommended_questions = await generate_dynamic_recommendations(
                     session_id=session_id,
                     current_question=request.question,
                     sql=sql_to_return,  # 使用确保不为空的SQL
@@ -1218,7 +1227,7 @@ SQL执行失败，错误信息：{execution_error or error}
             chart_type=chart_config.get("type") if chart_config else None,
             chart_config=json.dumps(chart_config, ensure_ascii=False) if chart_config else None,
             query_result=json.dumps(data[:100], ensure_ascii=False) if data else None,  # 只保存前100条数据
-            tokens_used=0  # TODO: 从工作流中获取token使用量
+            tokens_used=0  # 注意：token使用量统计功能待实现，需要从LLM客户端获取
         )
         db.add(assistant_message)
         
@@ -1255,7 +1264,7 @@ SQL执行失败，错误信息：{execution_error or error}
                 "chart_config": chart_config,
                 "data": data[:100] if data else [],  # 只返回前100条
                 "data_total": len(data) if data else 0,
-                "tokens_used": 0,  # TODO: 从工作流中获取
+                "tokens_used": 0,  # 注意：token使用量统计功能待实现
                 "model": model_config.model_name,
                 "retry_count": workflow_result.get("retry_count", 0),  # 重试次数
                 "recommended_questions": recommended_questions,  # 动态生成的推荐问题（基于当前会话上下文）

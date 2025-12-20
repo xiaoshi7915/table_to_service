@@ -333,26 +333,93 @@ docker-compose down
 
 ## 性能优化
 
-### 1. 启用Redis缓存
+### 1. 启用Redis缓存（推荐）
 
-在 `.env` 中配置Redis：
+#### 安装Redis
 
 ```bash
-REDIS_URL=redis://127.0.0.1:6379/0
-CACHE_TTL=3600
+# Ubuntu/Debian
+sudo apt install -y redis-server
+sudo systemctl start redis-server
+sudo systemctl enable redis-server
+
+# CentOS/RHEL
+sudo yum install -y redis
+sudo systemctl start redis
+sudo systemctl enable redis
 ```
+
+#### 配置Redis（生产环境）
+
+编辑 `/etc/redis/redis.conf`:
+
+```bash
+# 设置密码（生产环境必须）
+requirepass your_strong_password_here
+
+# 设置最大内存（根据服务器内存调整）
+maxmemory 2gb
+maxmemory-policy allkeys-lru
+
+# 重启Redis
+sudo systemctl restart redis
+```
+
+#### 在 `.env` 中配置Redis
+
+```bash
+REDIS_URL=redis://:your_strong_password@127.0.0.1:6379/0
+REDIS_PASSWORD=your_strong_password
+REDIS_DB=0
+CACHE_TTL=3600  # 缓存过期时间（秒，默认1小时）
+```
+
+#### 验证Redis连接
+
+```bash
+# 测试连接
+redis-cli -a your_strong_password ping
+# 应该返回: PONG
+
+# 或在Python中测试
+python -c "import redis; r=redis.from_url('redis://:your_strong_password@127.0.0.1:6379/0'); print(r.ping())"
+```
+
+**注意**: 如果Redis不可用，系统会自动降级到内存缓存（单进程场景可用）。
 
 ### 2. 数据库连接池优化
 
-在数据库配置中设置连接池参数：
+#### 环境变量配置
 
-```python
-# 在extra_params中配置
-{
-    "pool_size": 10,
-    "max_overflow": 20,
-    "pool_pre_ping": True
-}
+在 `.env` 文件中配置连接池参数：
+
+```bash
+# 目标数据库连接池配置（用于表转服务）
+DB_POOL_SIZE=10          # 连接池大小（默认10）
+DB_MAX_OVERFLOW=20       # 最大溢出连接数（默认20）
+DB_POOL_RECYCLE=3600     # 连接回收时间（秒，默认1小时）
+
+# 本地数据库连接池配置（用于系统自身数据存储）
+LOCAL_DB_POOL_SIZE=5     # 本地数据库连接池大小（默认5）
+LOCAL_DB_MAX_OVERFLOW=10 # 本地数据库最大溢出连接数（默认10）
+```
+
+#### 推荐配置
+
+**高并发场景**:
+```bash
+DB_POOL_SIZE=20
+DB_MAX_OVERFLOW=40
+LOCAL_DB_POOL_SIZE=10
+LOCAL_DB_MAX_OVERFLOW=20
+```
+
+**低并发场景**:
+```bash
+DB_POOL_SIZE=5
+DB_MAX_OVERFLOW=10
+LOCAL_DB_POOL_SIZE=3
+LOCAL_DB_MAX_OVERFLOW=5
 ```
 
 ### 3. 前端代码分割
@@ -364,22 +431,92 @@ cd frontend
 npm run build
 ```
 
+### 4. 日志配置优化
+
+日志配置已在 `backend/app/main.py` 中自动配置：
+
+- **应用日志**: `backend/logs/app_YYYY-MM-DD.log`
+  - 轮转: 每天午夜
+  - 保留: 30天
+  - 压缩: 自动压缩为zip
+
+- **错误日志**: `backend/logs/error_YYYY-MM-DD.log`
+  - 轮转: 每天午夜
+  - 保留: 90天
+  - 压缩: 自动压缩为zip
+
+无需额外配置，系统会自动管理日志文件。
+
 ## 监控和日志
 
 ### 日志位置
 
-- **后端日志**: `/opt/table_to_service/backend/logs/app_YYYY-MM-DD.log`
+- **应用日志**: `/opt/table_to_service/backend/logs/app_YYYY-MM-DD.log`
+- **错误日志**: `/opt/table_to_service/backend/logs/error_YYYY-MM-DD.log`
 - **系统日志**: `journalctl -u table-to-service-backend`
 
 ### 查看日志
 
 ```bash
-# 后端日志
+# 应用日志（实时）
 tail -f /opt/table_to_service/backend/logs/app_$(date +%Y-%m-%d).log
+
+# 错误日志（实时）
+tail -f /opt/table_to_service/backend/logs/error_$(date +%Y-%m-%d).log
 
 # 系统服务日志
 sudo journalctl -u table-to-service-backend -f
+
+# 查看今日错误数量
+grep -c "ERROR" /opt/table_to_service/backend/logs/error_$(date +%Y-%m-%d).log
 ```
+
+### 错误日志监控（推荐配置）
+
+#### 方案1: 简单监控脚本
+
+创建监控脚本 `/opt/table_to_service/backend/scripts/monitor_errors.sh`:
+
+```bash
+#!/bin/bash
+ERROR_LOG="/opt/table_to_service/backend/logs/error_$(date +%Y-%m-%d).log"
+THRESHOLD=10  # 错误阈值
+
+if [ -f "$ERROR_LOG" ]; then
+    ERROR_COUNT=$(grep -c "ERROR" "$ERROR_LOG" 2>/dev/null || echo "0")
+    if [ "$ERROR_COUNT" -gt "$THRESHOLD" ]; then
+        echo "警告: 今日错误日志超过阈值 ($ERROR_COUNT > $THRESHOLD)"
+        # 可以在这里添加告警逻辑（邮件、Slack、企业微信等）
+    fi
+fi
+```
+
+添加到crontab（每小时检查一次）:
+
+```bash
+chmod +x /opt/table_to_service/backend/scripts/monitor_errors.sh
+crontab -e
+# 添加: 0 * * * * /opt/table_to_service/backend/scripts/monitor_errors.sh
+```
+
+#### 方案2: 集成监控系统（推荐生产环境）
+
+- **Prometheus + Grafana**: 收集日志指标，可视化监控
+- **ELK Stack**: Elasticsearch + Logstash + Kibana
+- **Sentry**: 错误追踪和告警
+
+### 审计日志
+
+系统支持审计日志功能，记录所有接口执行情况：
+
+1. **启用审计日志**: 在接口配置中勾选"启用审计日志"
+2. **查看审计日志**: 审计日志保存在 `audit_logs` 表中
+3. **日志内容**: 包括请求参数、响应数据、执行时间、用户ID、客户端IP等
+
+**建议**:
+- 定期清理旧审计日志（保留90天）
+- 配置审计日志备份策略
+- 监控异常访问模式
 
 ## 备份和恢复
 
@@ -434,6 +571,69 @@ tar -czf config_backup_$(date +%Y%m%d).tar.gz .env backend/app/core/config.py
 4. **定期更新**: 定期更新系统和依赖包
 5. **备份数据**: 定期备份数据库和配置文件
 
+## 测试验证
+
+### 运行单元测试
+
+```bash
+cd /opt/table_to_service/backend
+source venv/bin/activate
+
+# 运行所有测试
+pytest tests/ -v
+
+# 运行SQL注入防护测试
+pytest tests/test_sql_injection_protection.py -v
+
+# 运行资源管理测试
+pytest tests/test_resource_management.py -v
+
+# 生成测试报告
+pytest tests/ --html=report.html --self-contained-html
+```
+
+### 压力测试（可选）
+
+#### 使用Apache Bench
+
+```bash
+# 安装
+sudo yum install httpd-tools -y  # CentOS
+sudo apt install apache2-utils -y  # Ubuntu
+
+# 获取Token（先登录）
+TOKEN=$(curl -X POST http://localhost:8300/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin123"}' | jq -r '.access_token')
+
+# 压力测试（1000请求，10并发）
+ab -n 1000 -c 10 -H "Authorization: Bearer $TOKEN" \
+   http://localhost:8300/api/v1/interfaces/1/execute
+```
+
+#### 使用wrk
+
+```bash
+# 安装
+sudo yum install wrk -y  # CentOS
+sudo apt install wrk -y  # Ubuntu
+
+# 压力测试（4线程，100连接，持续30秒）
+wrk -t4 -c100 -d30s -H "Authorization: Bearer $TOKEN" \
+    http://localhost:8300/api/v1/interfaces/1/execute
+```
+
+### SQL注入防护验证
+
+系统已实现SQL注入防护机制，所有测试用例已通过：
+
+```bash
+# 运行SQL注入防护测试
+pytest tests/test_sql_injection_protection.py -v
+
+# 预期结果: 5个测试全部通过
+```
+
 ## 更新部署
 
 ```bash
@@ -453,7 +653,11 @@ cd ../frontend
 npm install
 npm run build
 
-# 4. 重启服务
+# 4. 运行测试（推荐）
+cd ../backend
+pytest tests/ -v
+
+# 5. 重启服务
 cd ..
 ./s restart
 ```
