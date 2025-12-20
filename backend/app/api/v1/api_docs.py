@@ -64,6 +64,7 @@ async def get_full_interface_doc(
     parse_sql_parameters = interface_configs_module.parse_sql_parameters
     
     request_parameters = []
+    response_parameters = []
     request_sample = {}
     response_sample = {
         "success": True,
@@ -71,16 +72,20 @@ async def get_full_interface_doc(
         "data": {
             "data": [],
             "count": 0,
-            "total": 0,
-            "page": 1,
-            "page_size": 10
+            "pageNumber": 1,
+            "pageSize": 10
         }
     }
     
-    # 解析请求参数
+    # 如果启用了分页，添加total字段
+    if config.return_total_count:
+        response_sample["data"]["total"] = 0
+    
+    # 解析请求参数和响应参数
     if config.entry_mode == "expert" and config.sql_statement:
         parsed = parse_sql_parameters(config.sql_statement)
         request_parameters = parsed.get("request_parameters", [])
+        response_parameters = parsed.get("response_parameters", [])
         for param in request_parameters:
             param_name = param.get("name")
             param_type = param.get("type", "string")
@@ -92,17 +97,47 @@ async def get_full_interface_doc(
                 request_sample[param_name] = True
             else:
                 request_sample[param_name] = "示例值"
-    elif config.entry_mode == "graphical" and config.where_conditions:
-        for cond in config.where_conditions:
-            if cond.get("value_type") == "variable" and cond.get("variable_name"):
-                request_parameters.append({
-                    "name": cond.get("variable_name"),
-                    "type": "string",
-                    "description": cond.get("description", ""),
-                    "constraint": "required" if cond.get("required", True) else "optional",
-                    "location": "query"
+    elif config.entry_mode == "graphical":
+        # 图形模式：从WHERE条件中提取请求参数
+        if config.where_conditions:
+            for cond in config.where_conditions:
+                if cond.get("value_type") == "variable" and cond.get("variable_name"):
+                    request_parameters.append({
+                        "name": cond.get("variable_name"),
+                        "type": "string",
+                        "description": cond.get("description", ""),
+                        "constraint": "required" if cond.get("required", True) else "optional",
+                        "location": "query"
+                    })
+                    request_sample[cond.get("variable_name")] = "示例值"
+        # 图形模式：从selected_fields中提取响应参数（数据字段）
+        if config.selected_fields:
+            for field in config.selected_fields:
+                response_parameters.append({
+                    "name": field,
+                    "type": "string",  # 默认类型，实际类型可以从数据库schema获取
+                    "description": f"字段 {field}",
+                    "constraint": "required"
                 })
-                request_sample[cond.get("variable_name")] = "示例值"
+    
+    # 如果启用了分页，添加分页参数到请求参数
+    if config.enable_pagination:
+        request_parameters.append({
+            "name": "pageNumber",
+            "type": "integer",
+            "description": "页码，从1开始",
+            "constraint": "optional",
+            "location": "query"
+        })
+        request_parameters.append({
+            "name": "pageSize",
+            "type": "integer",
+            "description": "每页数量，最大1000",
+            "constraint": "optional",
+            "location": "query"
+        })
+        request_sample["pageNumber"] = 1
+        request_sample["pageSize"] = 10
     
     # 尝试实际执行接口获取真实响应数据作为示例
     try:
@@ -117,13 +152,40 @@ async def get_full_interface_doc(
             user_id=current_user.id
         )
         if real_result and isinstance(real_result, dict) and real_result.get("data") is not None:
-            response_sample["data"] = {
+            response_data = {
                 "data": real_result.get("data", [])[:1],
                 "count": len(real_result.get("data", [])[:1]),
-                "total": real_result.get("total", 0),
-                "page": real_result.get("page", 1),
-                "page_size": real_result.get("page_size", 1)
+                "pageNumber": real_result.get("pageNumber", 1),
+                "pageSize": real_result.get("pageSize", 1)
             }
+            if config.return_total_count:
+                response_data["total"] = real_result.get("total", 0)
+            response_sample["data"] = response_data
+            
+            # 从实际执行结果中提取响应参数（数据字段）
+            if real_result.get("data") and len(real_result.get("data", [])) > 0:
+                # 获取第一条数据的字段作为响应参数
+                first_row = real_result.get("data", [])[0]
+                if isinstance(first_row, dict):
+                    # 如果响应参数为空（例如SELECT *的情况），从实际数据中提取
+                    if not response_parameters:
+                        for field_name in first_row.keys():
+                            # 推断字段类型
+                            field_value = first_row[field_name]
+                            field_type = "string"
+                            if isinstance(field_value, int):
+                                field_type = "integer"
+                            elif isinstance(field_value, float):
+                                field_type = "number"
+                            elif isinstance(field_value, bool):
+                                field_type = "boolean"
+                            
+                            response_parameters.append({
+                                "name": field_name,
+                                "type": field_type,
+                                "description": f"字段 {field_name}",
+                                "constraint": "required"
+                            })
     except Exception as e:
         logger.warning("获取真实响应数据失败，使用默认示例: {}", e)
         if config.entry_mode == "graphical" and config.selected_fields:
@@ -145,7 +207,8 @@ async def get_full_interface_doc(
                         sample_row[field] = "示例值"
                     response_sample["data"]["data"] = [sample_row]
                     response_sample["data"]["count"] = 1
-                    response_sample["data"]["total"] = 1
+                    if config.return_total_count:
+                        response_sample["data"]["total"] = 1
     
     # 获取服务器地址和端口（从环境变量或请求头获取）
     if settings.API_SERVER_HOST:
@@ -194,6 +257,7 @@ async def get_full_interface_doc(
         "return_total_count": config.return_total_count,
         "enable_rate_limit": config.enable_rate_limit,
         "request_parameters": request_parameters,
+        "response_parameters": response_parameters,
         "request_sample": request_sample,
         "response_sample": response_sample,
         "curl_example": generate_curl_example(config, full_url, request_sample, config.proxy_auth),
@@ -383,6 +447,15 @@ async def export_markdown(
                 content += json.dumps(doc['request_sample'], indent=2, ensure_ascii=False)
                 content += "\n```\n\n"
             
+            # 响应参数
+            if doc.get('response_parameters'):
+                content += "### 响应参数\n\n"
+                content += "| 参数名 | 类型 | 描述 | 约束 |\n"
+                content += "|--------|------|------|------|\n"
+                for param in doc['response_parameters']:
+                    content += f"| {param.get('name', '')} | {param.get('type', '')} | {param.get('description', '')} | {param.get('constraint', '')} |\n"
+                content += "\n"
+            
             # 响应示例
             if doc['response_sample']:
                 content += "### 响应示例\n\n"
@@ -519,6 +592,35 @@ async def export_html(
                 html_content += """</code></pre>
 """
             
+            # 响应参数
+            if doc.get('response_parameters'):
+                html_content += """
+        <h3>响应参数</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>参数名</th>
+                    <th>类型</th>
+                    <th>描述</th>
+                    <th>约束</th>
+                </tr>
+            </thead>
+            <tbody>
+"""
+                for param in doc['response_parameters']:
+                    html_content += f"""
+                <tr>
+                    <td>{param.get('name', '')}</td>
+                    <td>{param.get('type', '')}</td>
+                    <td>{param.get('description', '')}</td>
+                    <td>{param.get('constraint', '')}</td>
+                </tr>
+"""
+                html_content += """
+            </tbody>
+        </table>
+"""
+            
             # 响应示例
             if doc['response_sample']:
                 html_content += """
@@ -636,6 +738,38 @@ async def export_openapi(
                     "schema": param_schema
                 })
             
+            # 构建响应schema
+            response_data_properties = {
+                "data": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "数据列表"
+                },
+                "count": {
+                    "type": "integer",
+                    "example": 1,
+                    "description": "当前页返回的数据条数"
+                },
+                "pageNumber": {
+                    "type": "integer",
+                    "example": 1,
+                    "description": "当前页码"
+                },
+                "pageSize": {
+                    "type": "integer",
+                    "example": 10,
+                    "description": "每页数量"
+                }
+            }
+            
+            # 如果启用了返回总数，添加total字段
+            if doc.get('enable_pagination') and doc.get('return_total_count'):
+                response_data_properties["total"] = {
+                    "type": "integer",
+                    "example": 100,
+                    "description": "数据总数"
+                }
+            
             operation = {
                 "summary": doc['interface_name'],
                 "description": doc['interface_description'] or "无描述",
@@ -653,16 +787,7 @@ async def export_openapi(
                                         "message": {"type": "string", "example": "执行成功"},
                                         "data": {
                                             "type": "object",
-                                            "properties": {
-                                                "data": {
-                                                    "type": "array",
-                                                    "items": {"type": "object"}
-                                                },
-                                                "count": {"type": "integer", "example": 1},
-                                                "total": {"type": "integer", "example": 1},
-                                                "page": {"type": "integer", "example": 1},
-                                                "page_size": {"type": "integer", "example": 10}
-                                            }
+                                            "properties": response_data_properties
                                         }
                                     }
                                 },

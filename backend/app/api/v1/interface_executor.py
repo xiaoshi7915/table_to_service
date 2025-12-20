@@ -161,7 +161,7 @@ def execute_interface_sql(
             
             if not sql:
                 raise ValueError("SQL语句为空")
-            
+
             # 专家模式：使用参数化查询（防止SQL注入）
             # 注意：这里使用text()和参数绑定，但需要确保SQL语句中的参数使用:param_name格式
             # 如果SQL中已经使用了:param_name格式，SQLAlchemy会自动处理参数绑定
@@ -178,6 +178,29 @@ def execute_interface_sql(
                         return escaped
                     return str(value)
                 
+                # 检查SQL中是否有未替换的占位符
+                placeholder_pattern = r':(\w+)'
+                placeholders_in_sql = re.findall(placeholder_pattern, sql)
+
+                # 宽松模式：如果参数缺失，将对应的WHERE条件移除
+                # 例如：WHERE province = :province AND city = :city
+                # 如果province缺失，则变为：WHERE city = :city
+                # 如果所有参数都缺失，则移除整个WHERE子句
+                missing_params = [p for p in placeholders_in_sql if p not in params]
+                if missing_params:
+                    # 移除缺失参数对应的WHERE条件
+                    # 使用正则表达式匹配并移除包含缺失参数的WHERE条件
+                    for missing_param in missing_params:
+                        # 匹配模式：AND/OR param = :param 或 WHERE param = :param
+                        placeholder_pattern = rf'(?:\s+(?:AND|OR)\s+|\s+WHERE\s+){re.escape(missing_param)}\s*=\s*:{re.escape(missing_param)}'
+                        sql = re.sub(placeholder_pattern, '', sql, flags=re.IGNORECASE)
+                        # 清理可能出现的多余空格和AND/OR
+                        sql = re.sub(r'\s+AND\s+AND', ' AND', sql, flags=re.IGNORECASE)
+                        sql = re.sub(r'\s+OR\s+OR', ' OR', sql, flags=re.IGNORECASE)
+                        sql = re.sub(r'WHERE\s+AND', 'WHERE', sql, flags=re.IGNORECASE)
+                        sql = re.sub(r'WHERE\s+OR', 'WHERE', sql, flags=re.IGNORECASE)
+                
+                # 替换占位符
                 for key, value in params.items():
                     placeholder = f":{key}"
                     if placeholder in sql:
@@ -251,6 +274,11 @@ def execute_interface_sql(
                 })
             
             # 执行查询
+            # 检查SQL中是否还有未替换的占位符（:param格式）
+            remaining_placeholders = re.findall(r':(\w+)', sql)
+            if remaining_placeholders:
+                raise ValueError(f"SQL查询包含未替换的参数占位符: {', '.join(remaining_placeholders)}。请提供这些参数的值。")
+            
             result = db.execute(text(sql))
             rows = result.fetchall()
             
@@ -457,6 +485,7 @@ def build_sql_from_graphical_config(
                 # 从参数中获取值
                 param_value = params.get(variable_name)
                 if param_value is None:
+                    # 如果参数不存在，跳过这个WHERE条件（不添加到WHERE子句中）
                     continue
                 if operator in ["like", "not_like"]:
                     escaped_val = escape_sql_value(param_value)
@@ -657,6 +686,13 @@ async def execute_interface_get(
         return response_data
     except HTTPException as e:
         raise
+    except ValueError as e:
+        # 参数错误，返回400 Bad Request
+        logger.warning("执行接口失败（参数错误）: {}", e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
     except Exception as e:
         logger.error("执行接口失败: {}", e, exc_info=True)
         raise HTTPException(
@@ -858,6 +894,13 @@ async def execute_interface_post(
         return response_data
     except HTTPException:
         raise
+    except ValueError as e:
+        # 参数错误，返回400 Bad Request
+        logger.warning("执行接口失败（参数错误）: {}", e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
     except Exception as e:
         logger.error("执行接口失败: {}", e, exc_info=True)
         raise HTTPException(

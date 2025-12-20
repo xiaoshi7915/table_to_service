@@ -53,20 +53,41 @@ def parse_sql_parameters(sql: str) -> Dict[str, Any]:
                 # 查找SELECT后的字段列表
                 tokens = stmt.tokens
                 in_select = False
+                select_fields_found = False
                 for token in tokens:
                     if token.ttype is DML and token.value.upper() == 'SELECT':
                         in_select = True
                         continue
-                    if in_select and isinstance(token, IdentifierList):
-                        for identifier in token.get_identifiers():
-                            if isinstance(identifier, Identifier):
-                                field_name = identifier.get_real_name()
-                                response_params.append({
-                                    "name": field_name,
-                                    "type": "string",
-                                    "description": f"字段 {field_name}"
-                                })
-                        break
+                    if in_select:
+                        # 检查是否是SELECT *
+                        if isinstance(token, sqlparse.sql.Token) and token.value.strip() == '*':
+                            # SELECT * 的情况，无法从SQL中提取字段，返回空列表
+                            # 字段信息需要从实际执行结果或表结构中获取
+                            break
+                        elif isinstance(token, IdentifierList):
+                            # SELECT field1, field2, ... 的情况
+                            for identifier in token.get_identifiers():
+                                if isinstance(identifier, Identifier):
+                                    field_name = identifier.get_real_name()
+                                    response_params.append({
+                                        "name": field_name,
+                                        "type": "string",
+                                        "description": f"字段 {field_name}",
+                                        "constraint": "required"
+                                    })
+                            select_fields_found = True
+                            break
+                        elif isinstance(token, Identifier):
+                            # SELECT field 的情况（单个字段）
+                            field_name = token.get_real_name()
+                            response_params.append({
+                                "name": field_name,
+                                "type": "string",
+                                "description": f"字段 {field_name}",
+                                "constraint": "required"
+                            })
+                            select_fields_found = True
+                            break
         
         return {
             "request_parameters": request_params,
@@ -195,16 +216,63 @@ async def get_config(
             parsed = parse_sql_parameters(config.sql_statement)
             request_parameters = parsed.get("request_parameters", [])
             response_parameters = parsed.get("response_parameters", [])
-        elif config.entry_mode == "graphical" and config.where_conditions:
-            # 图形模式：从WHERE条件中提取参数
-            for cond in config.where_conditions:
-                if cond.get("value_type") == "variable" and cond.get("variable_name"):
-                    request_parameters.append({
-                        "name": cond.get("variable_name"),
-                        "type": "string",
-                        "description": cond.get("description", ""),
-                        "constraint": "required" if cond.get("required", True) else "optional",
-                        "location": "query"
+            
+            # 如果响应参数为空（例如SELECT *的情况），尝试从实际执行结果中获取
+            if not response_parameters:
+                try:
+                    from app.api.v1.interface_executor import execute_interface_sql
+                    # 执行一次查询获取字段信息（使用LIMIT 1避免大量数据）
+                    test_result = execute_interface_sql(
+                        config,
+                        db_config,
+                        {},  # 空参数
+                        page=1,
+                        page_size=1,
+                        client_ip=None,
+                        user_id=current_user.id
+                    )
+                    if test_result and isinstance(test_result, dict) and test_result.get("data"):
+                        first_row = test_result.get("data", [])
+                        if first_row and len(first_row) > 0 and isinstance(first_row[0], dict):
+                            for field_name in first_row[0].keys():
+                                # 推断字段类型
+                                field_value = first_row[0][field_name]
+                                field_type = "string"
+                                if isinstance(field_value, int):
+                                    field_type = "integer"
+                                elif isinstance(field_value, float):
+                                    field_type = "number"
+                                elif isinstance(field_value, bool):
+                                    field_type = "boolean"
+                                
+                                response_parameters.append({
+                                    "name": field_name,
+                                    "type": field_type,
+                                    "description": f"字段 {field_name}",
+                                    "constraint": "required"
+                                })
+                except Exception as e:
+                    logger.warning(f"尝试从实际执行结果获取响应参数失败: {e}")
+        elif config.entry_mode == "graphical":
+            # 图形模式：从WHERE条件中提取请求参数
+            if config.where_conditions:
+                for cond in config.where_conditions:
+                    if cond.get("value_type") == "variable" and cond.get("variable_name"):
+                        request_parameters.append({
+                            "name": cond.get("variable_name"),
+                            "type": "string",
+                            "description": cond.get("description", ""),
+                            "constraint": "required" if cond.get("required", True) else "optional",
+                            "location": "query"
+                        })
+            # 图形模式：从selected_fields中提取响应参数（数据字段）
+            if config.selected_fields:
+                for field in config.selected_fields:
+                    response_parameters.append({
+                        "name": field,
+                        "type": "string",  # 默认类型，实际类型可以从数据库schema获取
+                        "description": f"字段 {field}",
+                        "constraint": "required"
                     })
         
         # 获取保存的请求参数（从数据库）
@@ -223,6 +291,30 @@ async def get_config(
         # 如果数据库中没有保存的参数，使用解析的参数
         if not saved_request_parameters:
             saved_request_parameters = request_parameters
+        
+        # 如果启用了分页，添加分页参数到请求参数
+        if config.enable_pagination:
+            # 检查是否已经存在分页参数，避免重复添加
+            has_page_number = any(p.get("name") == "pageNumber" for p in saved_request_parameters)
+            has_page_size = any(p.get("name") == "pageSize" for p in saved_request_parameters)
+            
+            if not has_page_number:
+                saved_request_parameters.append({
+                    "name": "pageNumber",
+                    "type": "integer",
+                    "description": "页码，从1开始",
+                    "constraint": "optional",
+                    "location": "query"
+                })
+            if not has_page_size:
+                saved_request_parameters.append({
+                    "name": "pageSize",
+                    "type": "integer",
+                    "description": "每页数量，最大1000",
+                    "constraint": "optional",
+                    "location": "query"
+                })
+        
         
         # 获取保存的响应头（从数据库）
         saved_headers = db.query(InterfaceHeader).filter(
@@ -621,22 +713,30 @@ async def get_interface_samples(
                     request_sample[param_name] = True
                 else:
                     request_sample[param_name] = "示例值"
+        
+        # 如果启用了分页，添加分页参数到样例
+        if config.enable_pagination:
+            request_sample["pageNumber"] = 1
+            request_sample["pageSize"] = 10
         elif config.entry_mode == "graphical" and config.where_conditions:
             for cond in config.where_conditions:
                 if cond.get("value_type") == "variable" and cond.get("variable_name"):
                     request_sample[cond.get("variable_name")] = "示例值"
         
         # 生成响应样例（基于字段信息）
+        response_data = {
+            "data": [],
+            "count": 0,
+            "pageNumber": 1,
+            "pageSize": 10
+        }
+        if config.return_total_count:
+            response_data["total"] = 0
+        
         response_sample = {
             "success": True,
             "message": "执行成功",
-            "data": {
-                "data": [],
-                "count": 0,
-                "total": 0,
-                "page": 1,
-                "page_size": 10
-            }
+            "data": response_data
         }
         
         if config.entry_mode == "graphical" and config.selected_fields:
@@ -646,7 +746,8 @@ async def get_interface_samples(
                 sample_row[field] = "示例值"
             response_sample["data"]["data"] = [sample_row]
             response_sample["data"]["count"] = 1
-            response_sample["data"]["total"] = 1
+            if config.enable_pagination and config.return_total_count:
+                response_sample["data"]["total"] = 1
         
         return ResponseModel(
             success=True,
@@ -685,21 +786,52 @@ async def get_interface_api_doc(
         
         db_config = db.query(DatabaseConfig).filter(DatabaseConfig.id == config.database_config_id).first()
         
-        # 获取请求参数
+        # 获取请求参数和响应参数
         request_parameters = []
+        response_parameters = []
+        
         if config.entry_mode == "expert" and config.sql_statement:
             parsed = parse_sql_parameters(config.sql_statement)
             request_parameters = parsed.get("request_parameters", [])
-        elif config.entry_mode == "graphical" and config.where_conditions:
-            for cond in config.where_conditions:
-                if cond.get("value_type") == "variable" and cond.get("variable_name"):
-                    request_parameters.append({
-                        "name": cond.get("variable_name"),
-                        "type": "string",
-                        "description": cond.get("description", ""),
-                        "constraint": "required" if cond.get("required", True) else "optional",
-                        "location": "query"
+            response_parameters = parsed.get("response_parameters", [])
+        elif config.entry_mode == "graphical":
+            # 图形模式：从WHERE条件中提取请求参数
+            if config.where_conditions:
+                for cond in config.where_conditions:
+                    if cond.get("value_type") == "variable" and cond.get("variable_name"):
+                        request_parameters.append({
+                            "name": cond.get("variable_name"),
+                            "type": "string",
+                            "description": cond.get("description", ""),
+                            "constraint": "required" if cond.get("required", True) else "optional",
+                            "location": "query"
+                        })
+            # 图形模式：从selected_fields中提取响应参数（数据字段）
+            if config.selected_fields:
+                for field in config.selected_fields:
+                    response_parameters.append({
+                        "name": field,
+                        "type": "string",  # 默认类型，实际类型可以从数据库schema获取
+                        "description": f"字段 {field}",
+                        "constraint": "required"
                     })
+        
+        # 如果启用了分页，添加分页参数到请求参数
+        if config.enable_pagination:
+            request_parameters.append({
+                "name": "pageNumber",
+                "type": "integer",
+                "description": "页码，从1开始",
+                "constraint": "optional",
+                "location": "query"
+            })
+            request_parameters.append({
+                "name": "pageSize",
+                "type": "integer",
+                "description": "每页数量，最大1000",
+                "constraint": "optional",
+                "location": "query"
+            })
         
         # 获取服务器地址和端口（从环境变量或请求头获取）
         from app.core.config import settings
@@ -744,18 +876,19 @@ async def get_interface_api_doc(
                 "parameters": request_parameters,
                 "sample": {}
             },
+            "response_parameters": response_parameters,
             "response": {
                 "format": config.response_format,
+                "parameters": response_parameters,  # 使用解析出的数据字段
                 "sample": {
                     "success": True,
                     "message": "执行成功",
                     "data": {
                         "data": [],
                         "count": 0,
-                        "total": 0,
-                        "page": 1,
-                        "page_size": 10
-                    }
+                        "pageNumber": 1,
+                        "pageSize": 10
+                    } | ({"total": 0} if config.return_total_count else {})
                 }
             },
             "pagination": {
@@ -773,7 +906,12 @@ async def get_interface_api_doc(
         for param in request_parameters:
             param_name = param.get("name")
             param_type = param.get("type", "string")
-            if param_type == "integer":
+            # 分页参数使用默认值
+            if param_name == "pageNumber":
+                api_doc["request"]["sample"][param_name] = 1
+            elif param_name == "pageSize":
+                api_doc["request"]["sample"][param_name] = 10
+            elif param_type == "integer":
                 api_doc["request"]["sample"][param_name] = 1
             elif param_type == "number":
                 api_doc["request"]["sample"][param_name] = 1.0

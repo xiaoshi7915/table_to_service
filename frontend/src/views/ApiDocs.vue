@@ -181,6 +181,20 @@
           </el-divider>
           <pre class="code-block">{{ JSON.stringify(currentDoc.request_sample || {}, null, 2) }}</pre>
           
+          <el-divider>响应参数</el-divider>
+          <el-table :data="currentDoc.response_parameters || []" border style="margin-top: 20px;">
+            <el-table-column prop="name" label="参数名" />
+            <el-table-column prop="type" label="类型" />
+            <el-table-column prop="constraint" label="约束">
+              <template #default="{ row }">
+                <el-tag :type="row.constraint === 'required' ? 'danger' : 'info'">
+                  {{ row.constraint === 'required' ? '必填' : '可选' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="description" label="描述" />
+          </el-table>
+          
           <el-divider>
             <span>响应示例</span>
             <el-button size="small" type="primary" @click="copyToClipboard(JSON.stringify(currentDoc.response_sample || {}, null, 2))" style="margin-left: 10px;">

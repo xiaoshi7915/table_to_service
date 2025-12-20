@@ -241,6 +241,20 @@
                 <pre style="background: #f5f5f5; padding: 15px; border-radius: 4px; overflow-x: auto; margin-top: 10px;">{{ JSON.stringify(requestSample, null, 2) }}</pre>
               </div>
             </el-tab-pane>
+            <el-tab-pane label="响应参数">
+              <el-table 
+                v-if="currentInterface.response_parameters && currentInterface.response_parameters.length > 0"
+                :data="currentInterface.response_parameters" 
+                border
+                style="width: 100%"
+              >
+                <el-table-column prop="name" label="参数名" width="150" />
+                <el-table-column prop="type" label="类型" width="100" />
+                <el-table-column prop="description" label="描述" />
+                <el-table-column prop="constraint" label="约束" width="100" />
+              </el-table>
+              <el-empty v-else description="无响应参数" />
+            </el-tab-pane>
             <el-tab-pane label="响应样例">
               <div v-if="responseSample" style="position: relative;">
                 <div style="margin-bottom: 10px; text-align: right;">
@@ -422,7 +436,18 @@
             :label="param.name"
             :required="param.constraint === 'required'"
           >
+            <!-- 分页参数使用数字输入框 -->
+            <el-input-number
+              v-if="param.type === 'integer' && (param.name === 'pageNumber' || param.name === 'pageSize')"
+              v-model="executeParams[param.name]"
+              :min="param.name === 'pageNumber' ? 1 : 1"
+              :max="param.name === 'pageSize' ? 1000 : undefined"
+              :placeholder="param.description || `请输入${param.name}`"
+              style="width: 100%;"
+            />
+            <!-- 其他参数使用文本输入框 -->
             <el-input
+              v-else
               v-model="executeParams[param.name]"
               :placeholder="param.description || `请输入${param.name}`"
               style="width: 100%;"
@@ -433,17 +458,6 @@
           </el-form-item>
         </el-form>
         <el-empty v-else description="该接口无需参数" :image-size="100" />
-        
-        <!-- 分页参数 -->
-        <el-divider v-if="currentInterface.enable_pagination">分页参数</el-divider>
-        <el-form :model="executeParams" label-width="120px" v-if="currentInterface.enable_pagination">
-          <el-form-item label="页码">
-            <el-input-number v-model="executeParams.page" :min="1" />
-          </el-form-item>
-          <el-form-item label="每页数量">
-            <el-input-number v-model="executeParams.page_size" :min="1" :max="100" />
-          </el-form-item>
-        </el-form>
         
         <!-- 执行按钮 -->
         <div style="margin-top: 20px; text-align: right;">
@@ -709,17 +723,60 @@ const handleView = async (row) => {
     }
     
     // 尝试获取实际响应数据作为示例（可选，失败不影响主流程）
+    // 注意：如果接口需要参数（专家模式的SQL参数），则不执行接口获取示例数据
+    // 因为缺少参数会导致错误，用户应该在执行对话框中填写参数后再执行
     try {
-      const executeRes = await api.get(`/interfaces/${row.id}/execute`, {
-        params: { pageNumber: 1, pageSize: 1 },
-        timeout: 5000 // 设置5秒超时，避免长时间等待
-      })
-      if (executeRes.data && executeRes.data.success && executeRes.data.data) {
-        // 使用实际响应数据更新示例
-        responseSample.value = {
-          success: executeRes.data.success,
-          message: executeRes.data.message,
-          data: executeRes.data.data
+      // 检查接口是否需要参数
+      let needsParams = false
+      if (currentInterface.value.entry_mode === 'expert' && currentInterface.value.sql_statement) {
+        // 解析SQL参数
+        try {
+          const parseRes = await api.post('/interface-configs/parse-sql', {
+            sql: currentInterface.value.sql_statement
+          })
+          if (parseRes.data && parseRes.data.success) {
+            const sqlParams = parseRes.data.data?.request_parameters || []
+            needsParams = sqlParams.length > 0
+          }
+        } catch (e) {
+          console.warn('解析SQL参数失败:', e)
+        }
+      } else if (currentInterface.value.entry_mode === 'graphical') {
+        // 图形模式：检查是否有变量类型的WHERE条件
+        if (currentInterface.value.where_conditions && Array.isArray(currentInterface.value.where_conditions)) {
+          needsParams = currentInterface.value.where_conditions.some(
+            cond => cond && cond.value_type === 'variable' && cond.variable_name
+          )
+        }
+      }
+      
+      // 如果接口需要参数，不执行接口获取示例数据（避免参数缺失错误）
+      if (!needsParams) {
+        const executeRes = await api.get(`/interfaces/${row.id}/execute`, {
+          params: { pageNumber: 1, pageSize: 1 },
+          timeout: 5000 // 设置5秒超时，避免长时间等待
+        })
+        if (executeRes.data && executeRes.data.success && executeRes.data.data) {
+          // 使用实际响应数据更新示例
+          responseSample.value = {
+            success: executeRes.data.success,
+            message: executeRes.data.message,
+            data: executeRes.data.data
+          }
+        }
+      } else {
+        // 接口需要参数，使用默认示例
+        console.info('接口需要参数，跳过自动执行获取示例数据')
+        if (!responseSample.value) {
+          responseSample.value = {
+            success: true,
+            message: 'success（示例数据，请填写参数后执行）',
+            data: {
+              data: [],
+              count: 0,
+              total: 0
+            }
+          }
         }
       }
     } catch (e) {
@@ -729,7 +786,7 @@ const handleView = async (row) => {
       if (!responseSample.value) {
         responseSample.value = {
           success: true,
-          message: '执行成功',
+          message: 'success',
           data: {
             data: [],
             count: 0,
@@ -788,20 +845,65 @@ const handleViewApiDoc = async (row) => {
     apiDoc.value = res.data.data
     
     // 尝试获取实际响应数据作为示例（可选，失败不影响主流程）
+    // 注意：如果接口需要参数（专家模式的SQL参数），则不执行接口获取示例数据
     try {
-      const executeRes = await api.get(`/interfaces/${row.id}/execute`, {
-        params: { pageNumber: 1, pageSize: 1 },
-        timeout: 5000 // 设置5秒超时，避免长时间等待
-      })
-      if (executeRes.data && executeRes.data.success && executeRes.data.data) {
-        // 使用实际响应数据更新示例
-        if (!apiDoc.value.response) {
-          apiDoc.value.response = {}
+      // 检查接口是否需要参数
+      let needsParams = false
+      if (res.data.data.entry_mode === 'expert' && res.data.data.sql_statement) {
+        // 解析SQL参数
+        try {
+          const parseRes = await api.post('/interface-configs/parse-sql', {
+            sql: res.data.data.sql_statement
+          })
+          if (parseRes.data && parseRes.data.success) {
+            const sqlParams = parseRes.data.data?.request_parameters || []
+            needsParams = sqlParams.length > 0
+          }
+        } catch (e) {
+          console.warn('解析SQL参数失败:', e)
         }
-        apiDoc.value.response.sample = {
-          success: executeRes.data.success,
-          message: executeRes.data.message,
-          data: executeRes.data.data
+      } else if (res.data.data.entry_mode === 'graphical') {
+        // 图形模式：检查是否有变量类型的WHERE条件
+        if (res.data.data.where_conditions && Array.isArray(res.data.data.where_conditions)) {
+          needsParams = res.data.data.where_conditions.some(
+            cond => cond && cond.value_type === 'variable' && cond.variable_name
+          )
+        }
+      }
+      
+      // 如果接口需要参数，不执行接口获取示例数据（避免参数缺失错误）
+      if (!needsParams) {
+        const executeRes = await api.get(`/interfaces/${row.id}/execute`, {
+          params: { pageNumber: 1, pageSize: 1 },
+          timeout: 5000 // 设置5秒超时，避免长时间等待
+        })
+        if (executeRes.data && executeRes.data.success && executeRes.data.data) {
+          // 使用实际响应数据更新示例
+          if (!apiDoc.value.response) {
+            apiDoc.value.response = {}
+          }
+          apiDoc.value.response.sample = {
+            success: executeRes.data.success,
+            message: executeRes.data.message,
+            data: executeRes.data.data
+          }
+        }
+      } else {
+        // 接口需要参数，使用默认示例
+        console.info('接口需要参数，跳过自动执行获取示例数据')
+        if (!apiDoc.value.response || !apiDoc.value.response.sample) {
+          if (!apiDoc.value.response) {
+            apiDoc.value.response = {}
+          }
+          apiDoc.value.response.sample = {
+            success: true,
+            message: 'success（示例数据，请填写参数后执行）',
+            data: {
+              data: [],
+              count: 0,
+              total: 0
+            }
+          }
         }
       }
     } catch (e) {
@@ -814,7 +916,7 @@ const handleViewApiDoc = async (row) => {
         }
         apiDoc.value.response.sample = {
           success: true,
-          message: '执行成功',
+          message: 'success',
           data: {
             data: [],
             count: 0,
@@ -915,15 +1017,44 @@ const handleExecute = async (row) => {
       }
     }
     
+    // 如果启用了分页，添加分页参数到参数列表
+    if (currentInterface.value.enable_pagination) {
+      // 检查是否已经存在分页参数，避免重复添加
+      const hasPageNumber = requestParameters.value.some(p => p.name === 'pageNumber')
+      const hasPageSize = requestParameters.value.some(p => p.name === 'pageSize')
+      
+      if (!hasPageNumber) {
+        requestParameters.value.push({
+          name: 'pageNumber',
+          type: 'integer',
+          description: '页码，从1开始',
+          constraint: 'optional',
+          location: 'query'
+        })
+      }
+      if (!hasPageSize) {
+        requestParameters.value.push({
+          name: 'pageSize',
+          type: 'integer',
+          description: '每页数量，最大1000',
+          constraint: 'optional',
+          location: 'query'
+        })
+      }
+    }
+    
     // 初始化执行参数
     Object.keys(executeParams).forEach(key => delete executeParams[key])
     requestParameters.value.forEach(param => {
-      executeParams[param.name] = ''
+      // 分页参数使用默认值
+      if (param.name === 'pageNumber') {
+        executeParams[param.name] = 1
+      } else if (param.name === 'pageSize') {
+        executeParams[param.name] = 10
+      } else {
+        executeParams[param.name] = ''
+      }
     })
-    if (currentInterface.value.enable_pagination) {
-      executeParams.page = 1
-      executeParams.page_size = 10
-    }
     
     executeResult.value = null
     dataFormat.value = 'table' // 重置数据格式为表格
@@ -979,7 +1110,7 @@ const doExecute = async () => {
     
     executeResult.value = res.data
     if (res.data.success) {
-      ElMessage.success('执行成功')
+      ElMessage.success('success')
     } else {
       const errorMsg = res.data.message || res.data.detail || '执行失败'
       ElMessage.warning(errorMsg)
