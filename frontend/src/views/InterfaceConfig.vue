@@ -111,6 +111,48 @@
                 已选择
               </div>
             </div>
+            
+            <!-- 问数模式卡片 -->
+            <div 
+              class="mode-card query-mode" 
+              :class="{ 'active': formData.entry_mode === 'query' }"
+              @click="formData.entry_mode = 'query'"
+            >
+              <div class="mode-icon-wrapper">
+                <el-icon :size="60" class="mode-icon"><ChatLineRound /></el-icon>
+              </div>
+              <div class="mode-title">问数模式</div>
+              <div class="mode-subtitle">Query Mode</div>
+              <div class="mode-description">
+                <p>通过智能问数生成SQL，自动创建接口配置</p>
+                <ul class="mode-features">
+                  <li>
+                    <el-icon><Check /></el-icon>
+                    <span>使用自然语言提问，AI自动生成SQL</span>
+                  </li>
+                  <li>
+                    <el-icon><Check /></el-icon>
+                    <span>从问数结果一键生成服务接口</span>
+                  </li>
+                  <li>
+                    <el-icon><Check /></el-icon>
+                    <span>自动解析SQL参数和响应格式</span>
+                  </li>
+                  <li>
+                    <el-icon><Check /></el-icon>
+                    <span>支持图表展示和数据导出</span>
+                  </li>
+                </ul>
+              </div>
+              <div class="mode-example">
+                <div class="example-label">特点：</div>
+                <div class="example-text">通过智能对话方式生成接口，适合快速原型开发和数据探索</div>
+              </div>
+              <div class="mode-select-indicator" v-if="formData.entry_mode === 'query'">
+                <el-icon><Select /></el-icon>
+                已选择
+              </div>
+            </div>
           </div>
         </el-card>
       </div>
@@ -712,7 +754,7 @@
           
           <el-descriptions :column="2" border>
             <el-descriptions-item label="录入模式">
-              {{ formData.entry_mode === 'expert' ? '专家模式' : '图形模式' }}
+              {{ formData.entry_mode === 'expert' ? '专家模式' : formData.entry_mode === 'query' ? '问数模式' : '图形模式' }}
             </el-descriptions-item>
             <el-descriptions-item label="数据库">
               {{ getDatabaseName(formData.database_config_id) }}
@@ -770,7 +812,7 @@
 import { ref, reactive, onMounted, watch, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Document, Grid, Setting, Check, Select, Plus, Delete } from '@element-plus/icons-vue'
+import { Document, Grid, Setting, Check, Select, Plus, Delete, ChatLineRound } from '@element-plus/icons-vue'
 import api from '../api'
 
 const router = useRouter()
@@ -1161,6 +1203,12 @@ const parseSql = async () => {
 }
 
 const nextStep = () => {
+  // 如果是在第一步（选择模式）且选择了问数模式，直接跳转到智能问数页面
+  if (currentStep.value === 0 && formData.entry_mode === 'query') {
+    router.push('/chat')
+    return
+  }
+  
   // 验证当前步骤
   if (currentStep.value === 1) {
     if (!formData.database_config_id) {
@@ -1558,11 +1606,13 @@ const goBack = () => {
   gap: 24px;
   padding: 20px 0;
   justify-content: center;
+  flex-wrap: wrap;
 }
 
 .mode-card {
   flex: 1;
-  max-width: 480px;
+  min-width: 300px;
+  max-width: 400px;
   min-height: 600px;
   border: 3px solid #e4e7ed;
   border-radius: 16px;
@@ -1600,6 +1650,16 @@ const goBack = () => {
   background: linear-gradient(135deg, rgba(79, 172, 254, 0.08) 0%, rgba(0, 242, 254, 0.08) 100%);
 }
 
+.mode-card.query-mode.active {
+  border-color: #f56c6c;
+  background: linear-gradient(135deg, rgba(245, 108, 108, 0.08) 0%, rgba(255, 159, 64, 0.08) 100%);
+}
+
+.mode-card.query-mode:hover {
+  border-color: #f56c6c;
+  box-shadow: 0 12px 32px rgba(245, 108, 108, 0.2);
+}
+
 .mode-icon-wrapper {
   width: 120px;
   height: 120px;
@@ -1620,6 +1680,10 @@ const goBack = () => {
   background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
 }
 
+.mode-card.query-mode.active .mode-icon-wrapper {
+  background: linear-gradient(135deg, #f56c6c 0%, #ff9f40 100%);
+}
+
 .mode-icon {
   color: #606266;
   transition: all 0.4s;
@@ -1630,6 +1694,10 @@ const goBack = () => {
 }
 
 .mode-card.graphical-mode.active .mode-icon {
+  color: white;
+}
+
+.mode-card.query-mode.active .mode-icon {
   color: white;
 }
 
@@ -1650,6 +1718,13 @@ const goBack = () => {
 
 .mode-card.graphical-mode.active .mode-title {
   background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.mode-card.query-mode.active .mode-title {
+  background: linear-gradient(135deg, #f56c6c 0%, #ff9f40 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -1705,6 +1780,10 @@ const goBack = () => {
 
 .mode-card.graphical-mode.active .mode-features li .el-icon {
   color: #4facfe;
+}
+
+.mode-card.query-mode.active .mode-features li .el-icon {
+  color: #f56c6c;
 }
 
 .mode-example {
@@ -1764,6 +1843,11 @@ const goBack = () => {
 .mode-card.graphical-mode.active .mode-select-indicator {
   background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
   box-shadow: 0 2px 8px rgba(79, 172, 254, 0.4);
+}
+
+.mode-card.query-mode.active .mode-select-indicator {
+  background: linear-gradient(135deg, #f56c6c 0%, #ff9f40 100%);
+  box-shadow: 0 2px 8px rgba(245, 108, 108, 0.4);
 }
 
 @keyframes fadeInScale {

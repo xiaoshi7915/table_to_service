@@ -2,7 +2,7 @@
   <el-container class="layout-container">
     <el-aside width="250px" class="sidebar">
       <div class="logo">
-        <h2>智能问数+表转服务</h2>
+        <h2>智能问数+服务</h2>
       </div>
       
       <el-menu

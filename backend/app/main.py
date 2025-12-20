@@ -41,8 +41,8 @@ logger.add(
 
 # 创建FastAPI应用
 app = FastAPI(
-    title="MySQL表转服务API",
-    description="将MySQL数据库表转换为RESTful API服务",
+    title="智能问数+服务API",
+    description="将智能问数+库表转换为RESTful API服务",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc"
@@ -129,7 +129,7 @@ logger.info("路由注册完成")
 async def startup_event():
     """应用启动事件"""
     logger.info("=" * 50)
-    logger.info("MySQL表转服务启动中...")
+    logger.info("智能问数+服务启动中...")
     logger.info("=" * 50)
     
     # 测试本地数据库连接
@@ -154,7 +154,7 @@ async def startup_event():
 async def root():
     """根路径"""
     return {
-        "message": "MySQL表转服务API",
+        "message": "智能问数+服务API",
         "version": "1.0.0",
         "docs": "/docs"
     }
