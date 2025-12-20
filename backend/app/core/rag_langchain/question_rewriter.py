@@ -86,17 +86,22 @@ class QuestionRewriter:
         # 优先使用LLM改写（如果可用）
         if self.llm_client:
             try:
-                return self._rewrite_with_llm(question, context)
+                result = self._rewrite_with_llm(question, context)
+                # 确保返回结果包含warnings
+                if "warnings" not in result:
+                    result["warnings"] = warnings
+                return result
             except Exception as e:
                 logger.warning(f"LLM改写失败: {e}，降级到规则引擎")
         
-        # 使用规则引擎改写
-        return self._rewrite_with_rules(question, context)
+        # 使用规则引擎改写（传递warnings）
+        return self._rewrite_with_rules(question, context, warnings)
     
     def _rewrite_with_llm(
         self,
         question: str,
-        context: Optional[Dict[str, Any]] = None
+        context: Optional[Dict[str, Any]] = None,
+        warnings: Optional[list] = None
     ) -> Dict[str, Any]:
         """
         使用LLM改写问题
@@ -104,6 +109,7 @@ class QuestionRewriter:
         Args:
             question: 原始问题
             context: 上下文信息
+            warnings: 警告列表（可选）
             
         Returns:
             改写结果
@@ -135,7 +141,7 @@ class QuestionRewriter:
         # 注意：这里暂时跳过LLM改写，因为需要异步调用
         # 可以在调用方使用async/await，或者创建异步版本
         logger.info("LLM改写功能需要异步调用，暂时使用规则引擎")
-        return self._rewrite_with_rules(question, context)
+        return self._rewrite_with_rules(question, context, warnings or [])
     
     def _rewrite_with_rules(
         self,
@@ -257,18 +263,54 @@ class QuestionRewriter:
                 "original_question": question,
                 "rewritten_question": question,
                 "changes": [],
-                "method": "none"
+                "method": "none",
+                "warnings": []
             }
+        
+        # 检测警告（与同步版本相同的逻辑）
+        warnings = []
+        
+        # 检测是否涉及查询所有数据明细
+        query_all_patterns = [
+            r'查询.*所有.*数据',
+            r'查看.*所有.*记录',
+            r'显示.*全部.*信息',
+            r'列出.*所有.*明细',
+            r'所有.*数据.*明细',
+            r'全部.*数据'
+        ]
+        
+        for pattern in query_all_patterns:
+            if re.search(pattern, question, re.IGNORECASE):
+                warnings.append("为了数据安全和性能考虑，系统不允许查询所有数据明细。建议使用统计查询（如COUNT、SUM等）或添加筛选条件。")
+                break
+        
+        # 检测是否涉及修改数据操作
+        modify_patterns = [
+            r'删除|删除数据|删除记录',
+            r'修改|更新|更改数据',
+            r'插入|添加|新增数据',
+            r'清空|清空数据|清空表'
+        ]
+        
+        for pattern in modify_patterns:
+            if re.search(pattern, question, re.IGNORECASE):
+                warnings.append("您没有权限执行修改数据的操作。系统只支持查询操作，请使用SELECT查询语句。")
+                break
         
         # 优先使用LLM改写（如果可用）
         if self.llm_client:
             try:
-                return await self._rewrite_with_llm_async(question, context)
+                result = await self._rewrite_with_llm_async(question, context)
+                # 确保返回结果包含warnings
+                if "warnings" not in result:
+                    result["warnings"] = warnings
+                return result
             except Exception as e:
                 logger.warning(f"LLM改写失败: {e}，降级到规则引擎")
         
-        # 使用规则引擎改写
-        return self._rewrite_with_rules(question, context)
+        # 使用规则引擎改写（传递warnings）
+        return self._rewrite_with_rules(question, context, warnings)
     
     async def _rewrite_with_llm_async(
         self,
@@ -334,11 +376,14 @@ class QuestionRewriter:
                     "original_question": question,
                     "rewritten_question": rewritten_question,
                     "changes": ["使用LLM优化了问题表述"],
-                    "method": "llm"
+                    "method": "llm",
+                    "warnings": []  # LLM改写不检测警告，警告在调用方检测
                 }
         except Exception as e:
             logger.error(f"LLM改写失败: {e}", exc_info=True)
             raise
         
         # 如果LLM改写失败或没有变化，使用规则引擎
-        return self._rewrite_with_rules(question, context)
+        # 注意：这里需要传递warnings，但异步方法中没有定义，所以传递空列表
+        # 警告应该在调用方（rewrite_question_async）中检测
+        return self._rewrite_with_rules(question, context, [])

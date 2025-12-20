@@ -64,5 +64,5 @@ backend/tests/
 *.backup
 账号信息.txt
 *.pid
-./cache/
+.cache/
 implementation_roadmap.md

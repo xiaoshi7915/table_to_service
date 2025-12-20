@@ -1,8 +1,9 @@
 """
 中文嵌入服务
-使用 text2vec-base-chinese 模型
+使用 bge-base-zh-v1.5 模型（BAAI General Embedding）
 """
 from typing import List
+import os
 try:
     # LangChain 1.x
     from langchain_huggingface import HuggingFaceEmbeddings
@@ -13,23 +14,32 @@ except ImportError:
     from langchain.embeddings.base import Embeddings
 from loguru import logger
 
+# 配置 Hugging Face 镜像源（如果未设置环境变量）
+if not os.getenv("HF_ENDPOINT"):
+    # 优先使用 .env 文件中的配置，如果没有则使用国内镜像
+    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+    logger.info("设置 Hugging Face 镜像源: https://hf-mirror.com")
+
 
 class ChineseEmbeddingService:
-    """中文嵌入服务（使用text2vec-base-chinese）"""
+    """中文嵌入服务（使用bge-base-zh-v1.5）"""
     
-    def __init__(self, model_name: str = "text2vec-base-chinese"):
+    def __init__(self, model_name: str = "BAAI/bge-base-zh-v1.5"):
         """
         初始化中文嵌入服务
         
         Args:
-            model_name: 模型名称，默认使用text2vec-base-chinese
+            model_name: 模型名称，默认使用BAAI/bge-base-zh-v1.5
         """
         self.model_name = model_name
         try:
             self.embeddings = HuggingFaceEmbeddings(
                 model_name=model_name,
                 model_kwargs={'device': 'cpu'},
-                encode_kwargs={'normalize_embeddings': True}  # 归一化向量
+                encode_kwargs={
+                    'normalize_embeddings': True,  # 归一化向量
+                    'batch_size': 32  # 批量处理大小
+                }
             )
             logger.info(f"成功加载中文嵌入模型: {model_name}")
         except Exception as e:
@@ -73,9 +83,9 @@ class ChineseEmbeddingService:
         获取嵌入向量维度
         
         Returns:
-            向量维度（text2vec-base-chinese为768）
+            向量维度（bge-base-zh-v1.5为768）
         """
-        # text2vec-base-chinese的维度是768
+        # bge-base-zh-v1.5的维度是768
         return 768
 
 

@@ -826,7 +826,7 @@ async def send_message(
         embedding_service = None
         try:
             embedding_service = ChineseEmbeddingService()
-            logger.info("使用中文嵌入模型（text2vec-base-chinese）")
+            logger.info("使用中文嵌入模型（bge-base-zh-v1.5）")
         except Exception as e:
             logger.warning(f"中文嵌入模型加载失败: {e}，将使用传统检索")
         
