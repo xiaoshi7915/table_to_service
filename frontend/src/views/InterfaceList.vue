@@ -84,8 +84,8 @@
         <el-table-column prop="database_name" label="数据库" width="150" />
         <el-table-column prop="entry_mode" label="录入模式" width="120">
           <template #default="{ row }">
-            <el-tag :type="row.entry_mode === 'expert' ? 'success' : 'info'">
-              {{ row.entry_mode === 'expert' ? '专家模式' : '图形模式' }}
+            <el-tag :type="row.entry_mode === 'expert' ? 'success' : row.entry_mode === 'query' ? 'warning' : 'info'">
+              {{ row.entry_mode === 'expert' ? '专家模式' : row.entry_mode === 'query' ? '问数模式' : '图形模式' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -168,8 +168,8 @@
           <el-descriptions-item label="接口名称">{{ currentInterface.interface_name }}</el-descriptions-item>
           <el-descriptions-item label="数据库">{{ currentInterface.database_name }}</el-descriptions-item>
           <el-descriptions-item label="录入模式">
-            <el-tag :type="currentInterface.entry_mode === 'expert' ? 'success' : 'info'">
-              {{ currentInterface.entry_mode === 'expert' ? '专家模式' : '图形模式' }}
+            <el-tag :type="currentInterface.entry_mode === 'expert' ? 'success' : currentInterface.entry_mode === 'query' ? 'warning' : 'info'">
+              {{ currentInterface.entry_mode === 'expert' ? '专家模式' : currentInterface.entry_mode === 'query' ? '问数模式' : '图形模式' }}
             </el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="状态">

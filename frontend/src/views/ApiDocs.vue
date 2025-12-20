@@ -58,8 +58,8 @@
         </el-table-column>
         <el-table-column prop="entry_mode" label="录入模式" width="100">
           <template #default="{ row }">
-            <el-tag :type="row.entry_mode === 'expert' ? 'warning' : 'success'">
-              {{ row.entry_mode === 'expert' ? '专家模式' : '图形模式' }}
+            <el-tag :type="row.entry_mode === 'expert' ? 'warning' : row.entry_mode === 'query' ? 'info' : 'success'">
+              {{ row.entry_mode === 'expert' ? '专家模式' : row.entry_mode === 'query' ? '问数模式' : '图形模式' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -130,8 +130,8 @@
               </el-tag>
             </el-descriptions-item>
             <el-descriptions-item label="录入模式">
-              <el-tag :type="currentDoc.entry_mode === 'expert' ? 'warning' : 'success'">
-                {{ currentDoc.entry_mode === 'expert' ? '专家模式' : '图形模式' }}
+              <el-tag :type="currentDoc.entry_mode === 'expert' ? 'warning' : currentDoc.entry_mode === 'query' ? 'info' : 'success'">
+                {{ currentDoc.entry_mode === 'expert' ? '专家模式' : currentDoc.entry_mode === 'query' ? '问数模式' : '图形模式' }}
               </el-tag>
             </el-descriptions-item>
             <el-descriptions-item label="分页" v-if="currentDoc.enable_pagination">

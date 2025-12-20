@@ -735,7 +735,7 @@ async def get_interface_samples(
         
         response_sample = {
             "success": True,
-            "message": "执行成功",
+            "message": "success",
             "data": response_data
         }
         
@@ -882,7 +882,7 @@ async def get_interface_api_doc(
                 "parameters": response_parameters,  # 使用解析出的数据字段
                 "sample": {
                     "success": True,
-                    "message": "执行成功",
+                    "message": "success",
                     "data": {
                         "data": [],
                         "count": 0,

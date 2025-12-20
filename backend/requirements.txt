@@ -24,6 +24,7 @@ pandas>=2.2.3,<3.0.0  # 数据处理
 openpyxl>=3.1.5,<4.0.0  # Excel导出
 xlsxwriter>=3.2.5,<4.0.0  # Excel导出（备用）
 matplotlib>=3.7.0,<4.0.0  # 图表PNG导出
+dicttoxml>=1.7.16  # XML导出
 
 # LangChain生态
 langchain>=0.3,<0.4

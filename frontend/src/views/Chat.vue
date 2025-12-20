@@ -224,7 +224,7 @@
                 </div>
                 <div
                   v-if="message.chart_type !== 'table'"
-                  ref="chartContainer"
+                  :id="`chart-${message.id}`"
                   class="chart-container"
                   :style="{ height: '400px' }"
                 ></div>
@@ -403,6 +403,41 @@
       </template>
     </el-dialog>
     
+    <!-- 导出数据对话框 -->
+    <el-dialog
+      v-model="exportDialogVisible"
+      title="导出数据"
+      width="500px"
+      @close="resetExportForm"
+    >
+      <el-form :model="exportForm" label-width="100px">
+        <el-form-item label="导出格式" required>
+          <el-select
+            v-model="exportForm.format"
+            placeholder="请选择导出格式"
+            style="width: 100%"
+          >
+            <el-option label="Excel (.xlsx)" value="excel" />
+            <el-option label="CSV (.csv)" value="csv" />
+            <el-option label="JSON (.json)" value="json" />
+            <el-option label="XML (.xml)" value="xml" />
+            <el-option label="PNG图片（仅图表）" value="png" />
+            <el-option label="生成服务接口" value="generate_interface" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="exportDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          @click="confirmExport"
+          :disabled="!exportForm.format"
+        >
+          确定
+        </el-button>
+      </template>
+    </el-dialog>
+    
     <!-- 添加到仪表板对话框 -->
     <el-dialog
       v-model="addToDashboardDialogVisible"
@@ -445,7 +480,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, watch } from 'vue'
+import { ref, onMounted, nextTick, watch, h } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as echarts from 'echarts'
 import { Plus, Delete, DocumentCopy, Download, Loading, DataBoard, Edit, ChatLineRound } from '@element-plus/icons-vue'
@@ -472,6 +507,13 @@ const createSessionForm = ref({
 const dataSources = ref([])
 const tables = ref([])
 const loadingTables = ref(false)
+
+// 导出数据相关
+const exportDialogVisible = ref(false)
+const exportForm = ref({
+  format: 'excel'
+})
+const currentMessageForExport = ref(null)
 
 // 添加到仪表板相关
 const addToDashboardDialogVisible = ref(false)
@@ -921,81 +963,266 @@ const copySQL = (sql) => {
 
 // 导出数据
 const exportData = async (message) => {
+  // 显示导出对话框
+  currentMessageForExport.value = message
+  exportForm.value.format = 'excel'
+  exportDialogVisible.value = true
+}
+
+// 确认导出
+const confirmExport = async () => {
+  if (!currentMessageForExport.value) {
+    ElMessage.error('消息不存在')
+    return
+  }
+  
+  const message = currentMessageForExport.value
+  const format = exportForm.value.format
+  
+  if (!format) {
+    ElMessage.warning('请选择导出格式')
+    return
+  }
+  
+  // 关闭对话框
+  exportDialogVisible.value = false
+  
+  // 如果选择生成接口
+  if (format === 'generate_interface') {
+    await generateInterfaceFromMessage(message)
+    return
+  }
+  
+  // 显示加载提示
+  const loadingMessage = ElMessage({
+    message: '正在导出，请稍候...',
+    type: 'info',
+    duration: 0
+  })
+  
   try {
-    // 显示导出格式选择对话框
-    const { value: format } = await ElMessageBox.prompt(
-      '请选择导出格式',
-      '导出数据',
-      {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        inputType: 'select',
-        inputOptions: {
-          excel: 'Excel (.xlsx)',
-          csv: 'CSV (.csv)',
-          png: 'PNG图片（仅图表）'
-        },
-        inputValue: 'excel'
-      }
-    )
+    // 调用导出API
+    const response = await chatApi.exportData(message.id, format)
     
-    if (!format) return
+    // 确定MIME类型
+    let mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    if (format === 'png') {
+      mimeType = 'image/png'
+    } else if (format === 'csv') {
+      mimeType = 'text/csv'
+    } else if (format === 'json') {
+      mimeType = 'application/json'
+    } else if (format === 'xml') {
+      mimeType = 'application/xml'
+    }
+    
+    // 创建下载链接
+    const blob = new Blob([response.data], { type: mimeType })
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    
+    // 从响应头获取文件名，或使用默认名称
+    const contentDisposition = response.headers['content-disposition']
+    let filename = `导出_${message.id}_${new Date().getTime()}`
+    if (contentDisposition) {
+      const matches = contentDisposition.match(/filename="?(.+)"?/i)
+      if (matches && matches[1]) {
+        filename = decodeURIComponent(matches[1])
+      }
+    } else {
+      const extensions = {
+        'png': '.png',
+        'csv': '.csv',
+        'json': '.json',
+        'xml': '.xml',
+        'excel': '.xlsx'
+      }
+      filename += extensions[format] || '.xlsx'
+    }
+    
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+    
+    loadingMessage.close()
+    ElMessage.success('导出成功')
+  } catch (error) {
+    loadingMessage.close()
+    ElMessage.error('导出失败：' + (error.response?.data?.detail || error.message || '未知错误'))
+  } finally {
+    resetExportForm()
+  }
+}
+
+// 重置导出表单
+const resetExportForm = () => {
+  exportForm.value = {
+    format: 'excel'
+  }
+  currentMessageForExport.value = null
+}
+
+// 从问数结果生成接口
+const generateInterfaceFromMessage = async (message) => {
+  try {
+    // 检查消息是否有SQL
+    if (!message.sql || !message.sql.trim()) {
+      ElMessage.warning('该消息没有SQL语句，无法生成接口')
+      return
+    }
+    
+    // 显示接口路径输入对话框（只输入/api/query之后的路径）
+    const { value: proxyPath } = await ElMessageBox.prompt(
+      '请输入接口路径（固定前缀：/api/query）',
+      '生成服务接口',
+      {
+        confirmButtonText: '生成',
+        cancelButtonText: '取消',
+        inputPlaceholder: '/school-count',
+        inputValue: `/query-${message.id}`,
+        inputValidator: (value) => {
+          if (!value || !value.trim()) {
+            return '接口路径不能为空'
+          }
+          // 如果用户输入了/api/query前缀，提示只需要后续路径
+          if (value.startsWith('/api/query')) {
+            return '只需输入/api/query之后的路径，例如：/school-count'
+          }
+          if (!value.startsWith('/')) {
+            return '接口路径必须以/开头'
+          }
+          return true
+        }
+      }
+    ).catch(() => ({ value: null }))
+    
+    if (!proxyPath) return
     
     // 显示加载提示
     const loadingMessage = ElMessage({
-      message: '正在导出，请稍候...',
+      message: '正在生成接口，请稍候...',
       type: 'info',
       duration: 0
     })
     
     try {
-      // 调用导出API
-      const response = await chatApi.exportData(message.id, format)
-      
-      // 创建下载链接
-      const blob = new Blob([response.data], {
-        type: format === 'png' ? 'image/png' : format === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      })
-      const url = window.URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      
-      // 从响应头获取文件名，或使用默认名称
-      const contentDisposition = response.headers['content-disposition']
-      let filename = `导出_${message.id}_${new Date().getTime()}`
-      if (contentDisposition) {
-        const matches = contentDisposition.match(/filename="?(.+)"?/i)
-        if (matches && matches[1]) {
-          filename = decodeURIComponent(matches[1])
-        }
-      } else {
-        filename += format === 'png' ? '.png' : format === 'csv' ? '.csv' : '.xlsx'
-      }
-      
-      link.download = filename
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.URL.revokeObjectURL(url)
+      // 调用生成接口API
+      const response = await chatApi.generateInterface(message.id, proxyPath)
       
       loadingMessage.close()
-      ElMessage.success('导出成功')
+      
+      if (response.code === 200 || response.success) {
+        const data = response.data
+        ElMessage.success('接口生成成功！')
+        
+        // 显示成功对话框，包含接口信息和复制按钮
+        const copyUrl = () => {
+          const url = data.full_url
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(url).then(() => {
+              ElMessage.success('URL已复制到剪贴板')
+            }).catch(() => {
+              // 降级方案
+              const textArea = document.createElement('textarea')
+              textArea.value = url
+              textArea.style.position = 'fixed'
+              textArea.style.left = '-999999px'
+              document.body.appendChild(textArea)
+              textArea.select()
+              document.execCommand('copy')
+              document.body.removeChild(textArea)
+              ElMessage.success('URL已复制到剪贴板')
+            })
+          } else {
+            // 降级方案
+            const textArea = document.createElement('textarea')
+            textArea.value = url
+            textArea.style.position = 'fixed'
+            textArea.style.left = '-999999px'
+            document.body.appendChild(textArea)
+            textArea.select()
+            document.execCommand('copy')
+            document.body.removeChild(textArea)
+            ElMessage.success('URL已复制到剪贴板')
+          }
+        }
+        
+        // 显示成功对话框，包含接口信息和复制按钮
+        ElMessageBox.alert(
+          `<div style="text-align: left;">
+            <p style="margin: 8px 0;"><strong>接口ID：</strong>${data.interface_id}</p>
+            <p style="margin: 8px 0;"><strong>接口名称：</strong>${data.interface_name}</p>
+            <p style="margin: 8px 0;"><strong>接口路径：</strong><code style="background: #f5f5f5; padding: 2px 6px; border-radius: 3px;">${data.proxy_path}</code></p>
+            <p style="margin: 8px 0;"><strong>完整URL：</strong><code style="background: #f5f5f5; padding: 2px 6px; border-radius: 3px; word-break: break-all; display: inline-block; max-width: 100%;">${data.full_url}</code></p>
+            <div style="margin: 12px 0; padding: 10px; background: #f0f9ff; border-left: 3px solid #409eff; border-radius: 4px;">
+              <p style="margin: 4px 0; font-weight: 500; color: #409eff;">分页参数说明：</p>
+              <p style="margin: 4px 0; font-size: 13px; color: #606266;">
+                • <strong>pageSize</strong>：每页数量，默认值为 <code style="background: #fff; padding: 1px 4px; border-radius: 2px;">10</code>
+              </p>
+              <p style="margin: 4px 0; font-size: 13px; color: #606266;">
+                • <strong>pageNumber</strong>：页码，默认值为 <code style="background: #fff; padding: 1px 4px; border-radius: 2px;">1</code>
+              </p>
+              <p style="margin: 4px 0; font-size: 12px; color: #909399; margin-top: 6px;">
+                示例：<code style="background: #fff; padding: 1px 4px; border-radius: 2px;">${data.full_url}?pageNumber=1&pageSize=10</code>
+              </p>
+            </div>
+            <p style="margin-top: 15px;">
+              <button id="copy-url-btn" style="padding: 6px 15px; background: #409eff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">复制URL</button>
+            </p>
+          </div>`,
+          '接口生成成功',
+          {
+            dangerouslyUseHTMLString: true,
+            confirmButtonText: '查看接口文档',
+            cancelButtonText: '关闭',
+            showCancelButton: true,
+            beforeClose: (action, instance, done) => {
+              // 移除事件监听器
+              const btn = document.getElementById('copy-url-btn')
+              if (btn) {
+                btn.removeEventListener('click', copyUrl)
+              }
+              done()
+            }
+          }
+        ).then(() => {
+          // 跳转到接口文档页面
+          window.open(`/#/interface-list?id=${data.interface_id}`, '_blank')
+        }).catch(() => {
+          // 用户点击关闭
+        })
+        
+        // 等待DOM更新后绑定复制按钮事件
+        await nextTick()
+        const copyBtn = document.getElementById('copy-url-btn')
+        if (copyBtn) {
+          copyBtn.addEventListener('click', copyUrl)
+        }
+      } else {
+        ElMessage.error(response.message || '生成接口失败')
+      }
     } catch (error) {
       loadingMessage.close()
       throw error
     }
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error('导出失败：' + (error.message || '未知错误'))
+      ElMessage.error('生成接口失败：' + (error.response?.data?.detail || error.message || '未知错误'))
     }
   }
 }
 
 // 切换图表类型
 const changeChartType = async (message) => {
-  // TODO: 调用后端API切换图表类型
+  // 更新图表类型后，重新渲染图表
   await nextTick()
-  renderChart(message)
+  // 确保DOM已更新
+  setTimeout(() => {
+    renderChart(message)
+  }, 100)
 }
 
 // 渲染图表
@@ -1009,56 +1236,294 @@ const renderCharts = () => {
 
 const renderChart = (message) => {
   const chartId = `chart-${message.id}`
-  const container = document.querySelector(`.chart-container`)
-  if (!container) return
+  // 使用消息ID作为容器选择器，确保每个消息有独立的图表容器
+  const container = document.getElementById(chartId)
+  if (!container) {
+    console.warn(`图表容器不存在: ${chartId}`)
+    return
+  }
   
   // 销毁旧图表
   if (chartInstances.value[chartId]) {
     chartInstances.value[chartId].dispose()
+    delete chartInstances.value[chartId]
+  }
+  
+  // 确保容器有尺寸
+  if (container.offsetWidth === 0 || container.offsetHeight === 0) {
+    console.warn(`图表容器尺寸为0: ${chartId}`)
+    return
   }
   
   // 创建新图表
   const chart = echarts.init(container)
   const config = message.chart_config
   
-  let option = {}
-  if (message.chart_type === 'bar') {
-    option = {
-      title: { text: config.title },
-      xAxis: config.xAxis,
-      yAxis: config.yAxis,
-      series: config.series
-    }
-  } else if (message.chart_type === 'line') {
-    option = {
-      title: { text: config.title },
-      xAxis: config.xAxis,
-      yAxis: config.yAxis,
-      series: config.series
-    }
-  } else if (message.chart_type === 'pie') {
-    option = {
-      title: { text: config.title },
-      series: config.series
-    }
-  } else if (message.chart_type === 'scatter') {
-    option = {
-      title: { text: config.title },
-      xAxis: config.xAxis,
-      yAxis: config.yAxis,
-      series: config.series
-    }
-  } else if (message.chart_type === 'area') {
-    option = {
-      title: { text: config.title },
-      xAxis: config.xAxis,
-      yAxis: config.yAxis,
-      series: config.series.map(s => ({ ...s, areaStyle: {} }))
+  // 如果没有配置，尝试从数据生成配置
+  if (!config) {
+    console.warn('图表配置不存在')
+    return
+  }
+  
+  // 获取数据用于单条数据时的图表生成
+  const data = message.data || []
+  const columns = message.columns || (data.length > 0 ? Object.keys(data[0]) : [])
+  
+  // 处理单条数据的情况
+  const hasData = data && data.length > 0
+  const isSingleRow = hasData && data.length === 1
+  
+  let option = {
+    title: {
+      text: config.title || '数据图表',
+      left: 'center',
+      textStyle: {
+        fontSize: 16
+      }
+    },
+    tooltip: {
+      trigger: message.chart_type !== 'pie' ? 'axis' : 'item'
+    },
+    legend: {
+      show: message.chart_type !== 'pie' && config.series && config.series.length > 1,
+      data: config.series ? config.series.map(s => s.name || '系列') : []
     }
   }
   
-  chart.setOption(option)
+  if (message.chart_type === 'bar') {
+    // 柱状图：处理单条数据的情况
+    let xAxisData = config.xAxis?.data || []
+    let seriesData = config.series || []
+    
+    // 如果配置为空且只有一条数据，从数据生成配置
+    if (isSingleRow && (!xAxisData.length || !seriesData.length)) {
+      const row = data[0]
+      if (columns.length >= 2) {
+        // 两列：第一列作为X轴，第二列作为Y轴
+        xAxisData = [String(row[columns[0]] || '数据')]
+        seriesData = [{
+          name: columns[1] || '数值',
+          type: 'bar',
+          data: [Number(row[columns[1]]) || 0]
+        }]
+      } else if (columns.length === 1) {
+        // 单列：使用列名作为X轴，值作为Y轴
+        xAxisData = [columns[0] || '数据']
+        seriesData = [{
+          name: columns[0] || '数值',
+          type: 'bar',
+          data: [Number(row[columns[0]]) || 0]
+        }]
+      }
+    }
+    
+    option = {
+      ...option,
+      xAxis: {
+        type: 'category',
+        data: xAxisData,
+        ...(config.xAxis || {})
+      },
+      yAxis: config.yAxis || {
+        type: 'value'
+      },
+      series: seriesData
+    }
+  } else if (message.chart_type === 'line') {
+    // 折线图：处理单条数据的情况
+    let xAxisData = config.xAxis?.data || []
+    let seriesData = config.series || []
+    
+    if (isSingleRow && (!xAxisData.length || !seriesData.length)) {
+      const row = data[0]
+      if (columns.length >= 2) {
+        xAxisData = [String(row[columns[0]] || '数据')]
+        seriesData = [{
+          name: columns[1] || '数值',
+          type: 'line',
+          data: [Number(row[columns[1]]) || 0],
+          smooth: true,
+          symbol: 'circle',
+          symbolSize: 6
+        }]
+      } else if (columns.length === 1) {
+        xAxisData = [columns[0] || '数据']
+        seriesData = [{
+          name: columns[0] || '数值',
+          type: 'line',
+          data: [Number(row[columns[0]]) || 0],
+          smooth: true,
+          symbol: 'circle',
+          symbolSize: 6
+        }]
+      }
+    } else {
+      seriesData = (seriesData || []).map(s => ({
+        ...s,
+        type: 'line',
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 6
+      }))
+    }
+    
+    option = {
+      ...option,
+      xAxis: {
+        type: 'category',
+        data: xAxisData,
+        ...(config.xAxis || {})
+      },
+      yAxis: config.yAxis || {
+        type: 'value'
+      },
+      series: seriesData
+    }
+  } else if (message.chart_type === 'pie') {
+    // 饼图：处理单条数据的情况
+    let seriesData = config.series || []
+    
+    if (isSingleRow && (!seriesData.length || !seriesData[0]?.data?.length)) {
+      const row = data[0]
+      const pieData = []
+      
+      if (columns.length >= 2) {
+        // 两列：第一列作为名称，第二列作为数值
+        pieData.push({
+          name: String(row[columns[0]] || '数据'),
+          value: Number(row[columns[1]]) || 0
+        })
+      } else if (columns.length === 1) {
+        // 单列：使用列名作为名称，值作为数值
+        pieData.push({
+          name: columns[0] || '数据',
+          value: Number(row[columns[0]]) || 0
+        })
+      }
+      
+      seriesData = [{
+        type: 'pie',
+        radius: '60%',
+        data: pieData
+      }]
+    } else if (seriesData.length > 0 && seriesData[0].data) {
+      // 确保series格式正确
+      seriesData = seriesData.map(s => ({
+        type: 'pie',
+        radius: s.radius || '60%',
+        data: s.data || []
+      }))
+    }
+    
+    option = {
+      ...option,
+      tooltip: {
+        trigger: 'item',
+        formatter: '{a} <br/>{b}: {c} ({d}%)'
+      },
+      series: seriesData
+    }
+  } else if (message.chart_type === 'scatter') {
+    // 散点图：处理单条数据的情况
+    let seriesData = config.series || []
+    
+    if (isSingleRow && (!seriesData.length || !seriesData[0]?.data?.length)) {
+      const row = data[0]
+      if (columns.length >= 2) {
+        seriesData = [{
+          type: 'scatter',
+          data: [[Number(row[columns[0]]) || 0, Number(row[columns[1]]) || 0]],
+          symbolSize: 8
+        }]
+      } else if (columns.length === 1) {
+        seriesData = [{
+          type: 'scatter',
+          data: [[0, Number(row[columns[0]]) || 0]],
+          symbolSize: 8
+        }]
+      }
+    } else {
+      seriesData = (seriesData || []).map(s => ({
+        ...s,
+        type: 'scatter',
+        symbolSize: s.symbolSize || 8
+      }))
+    }
+    
+    option = {
+      ...option,
+      xAxis: config.xAxis || {
+        type: 'value'
+      },
+      yAxis: config.yAxis || {
+        type: 'value'
+      },
+      series: seriesData
+    }
+  } else if (message.chart_type === 'area') {
+    // 面积图：处理单条数据的情况
+    let xAxisData = config.xAxis?.data || []
+    let seriesData = config.series || []
+    
+    if (isSingleRow && (!xAxisData.length || !seriesData.length)) {
+      const row = data[0]
+      if (columns.length >= 2) {
+        xAxisData = [String(row[columns[0]] || '数据')]
+        seriesData = [{
+          name: columns[1] || '数值',
+          type: 'line',
+          data: [Number(row[columns[1]]) || 0],
+          areaStyle: {},
+          smooth: true
+        }]
+      } else if (columns.length === 1) {
+        xAxisData = [columns[0] || '数据']
+        seriesData = [{
+          name: columns[0] || '数值',
+          type: 'line',
+          data: [Number(row[columns[0]]) || 0],
+          areaStyle: {},
+          smooth: true
+        }]
+      }
+    } else {
+      seriesData = (seriesData || []).map(s => ({
+        ...s,
+        type: 'line',
+        areaStyle: {},
+        smooth: true
+      }))
+    }
+    
+    option = {
+      ...option,
+      xAxis: {
+        type: 'category',
+        data: xAxisData,
+        ...(config.xAxis || {})
+      },
+      yAxis: config.yAxis || {
+        type: 'value'
+      },
+      series: seriesData
+    }
+  }
+  
+  chart.setOption(option, true) // 使用true强制重新渲染
   chartInstances.value[chartId] = chart
+  
+  // 监听窗口大小变化，自动调整图表大小
+  const resizeHandler = () => {
+    if (chartInstances.value[chartId]) {
+      chartInstances.value[chartId].resize()
+    }
+  }
+  window.addEventListener('resize', resizeHandler)
+  
+  // 保存resize处理器，以便后续清理
+  if (!message._resizeHandler) {
+    message._resizeHandler = resizeHandler
+  }
 }
 
 // 格式化时间

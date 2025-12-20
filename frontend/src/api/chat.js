@@ -79,6 +79,15 @@ export default {
     })
   },
   
+  // 从问数结果生成接口
+  generateInterface(messageId, proxyPath) {
+    return request({
+      url: `/api/v1/chat/messages/${messageId}/generate-interface`,
+      method: 'post',
+      data: { proxy_path: proxyPath }
+    })
+  },
+  
   // 更新会话（重命名）
   updateSession(sessionId, data) {
     return request({

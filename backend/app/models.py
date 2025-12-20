@@ -68,7 +68,7 @@ class InterfaceConfig(Base):
     status = Column(String(20), default="draft", comment="状态: draft/inactive/active")
     
     # 录入模式
-    entry_mode = Column(String(20), nullable=False, comment="录入模式: expert/graphical")
+    entry_mode = Column(String(20), nullable=False, comment="录入模式: expert/graphical/query (query为问数模式)")
     
     # 专家模式配置
     sql_statement = Column(Text, comment="SQL语句（专家模式）")

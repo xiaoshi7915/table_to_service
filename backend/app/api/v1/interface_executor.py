@@ -162,11 +162,11 @@ def execute_interface_sql(
             if not sql:
                 raise ValueError("SQL语句为空")
 
-            # 专家模式：使用参数化查询（防止SQL注入）
+            # 专家模式或问数模式：使用参数化查询（防止SQL注入）
             # 注意：这里使用text()和参数绑定，但需要确保SQL语句中的参数使用:param_name格式
             # 如果SQL中已经使用了:param_name格式，SQLAlchemy会自动处理参数绑定
             # 但为了兼容性，我们仍然需要处理字符串替换（已转义）
-            if interface_config.entry_mode == "expert":
+            if interface_config.entry_mode in ["expert", "query"]:
                 # 转义单引号防止SQL注入
                 def escape_sql_string(value):
                     """转义SQL字符串值，防止SQL注入"""
@@ -640,7 +640,7 @@ async def execute_interface_get(
         # 构建响应
         response_data = ResponseModel(
             success=True,
-            message="执行成功",
+            message="success",
             data=result
         )
         
@@ -848,7 +848,7 @@ async def execute_interface_post(
         # 构建响应
         response_data = ResponseModel(
             success=True,
-            message="执行成功",
+            message="success",
             data=result
         )
         

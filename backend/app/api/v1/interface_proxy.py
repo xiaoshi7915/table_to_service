@@ -166,7 +166,7 @@ async def proxy_interface(
         return JSONResponse(
             content={
                 "success": True,
-                "message": "执行成功",
+                "message": "success",
                 "data": result
             },
             headers={
