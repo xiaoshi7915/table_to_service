@@ -33,4 +33,22 @@ export const getPromptTypes = () => {
   return api.get('/prompts/types/list')
 }
 
+// 下载提示词导入模板
+export const downloadPromptTemplate = () => {
+  return api.get('/prompts/template', {
+    responseType: 'blob'
+  })
+}
+
+// 批量导入提示词
+export const batchCreatePrompts = (file) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  return api.post('/prompts/batch', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data'
+    }
+  })
+}
+
 

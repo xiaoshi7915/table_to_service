@@ -28,4 +28,22 @@ export const deleteSQLExample = (id) => {
   return api.delete(`/sql-examples/${id}`)
 }
 
+// 下载SQL示例导入模板
+export const downloadSQLExampleTemplate = () => {
+  return api.get('/sql-examples/template', {
+    responseType: 'blob'
+  })
+}
+
+// 批量导入SQL示例
+export const batchCreateSQLExamples = (file) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  return api.post('/sql-examples/batch', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data'
+    }
+  })
+}
+
 

@@ -19,6 +19,10 @@
               <el-icon><Upload /></el-icon>
               批量导入
             </el-button>
+            <el-button @click="handleDownloadTemplate" class="action-btn">
+              <el-icon><Download /></el-icon>
+              下载模板
+            </el-button>
             <el-button @click="loadTerminologies" :loading="loading" class="action-btn">
               <el-icon><Refresh /></el-icon>
               刷新
@@ -189,23 +193,51 @@
         style="margin-bottom: 20px"
       >
         <template #default>
-          <div>每行一个术语，格式：业务术语,数据库字段,表名,分类,说明</div>
+          <div>支持Excel(.xlsx/.xls)或JSON(.json)格式文件，也可以手动输入文本</div>
           <div style="margin-top: 10px; color: #909399; font-size: 12px">
-            示例：销售量,sales_amount,sales,销售类,销售金额
+            Excel格式：必须包含列：业务术语、数据库字段（可选：表名、说明、分类）
+          </div>
+          <div style="margin-top: 5px; color: #909399; font-size: 12px">
+            JSON格式：数组格式，每个对象包含business_term、db_field等字段
+          </div>
+          <div style="margin-top: 5px; color: #909399; font-size: 12px">
+            文本格式：每行一个术语，格式：业务术语,数据库字段,表名,分类,说明
           </div>
         </template>
       </el-alert>
+      
+      <el-upload
+        ref="uploadRef"
+        :auto-upload="false"
+        :on-change="handleFileChange"
+        :limit="1"
+        accept=".xlsx,.xls,.json"
+        drag
+        style="margin-bottom: 20px"
+      >
+        <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
+        <div class="el-upload__text">
+          将文件拖到此处，或<em>点击上传</em>
+        </div>
+        <template #tip>
+          <div class="el-upload__tip">
+            只能上传Excel或JSON文件
+          </div>
+        </template>
+      </el-upload>
+      
+      <el-divider>或</el-divider>
       
       <el-input
         v-model="batchText"
         type="textarea"
         :rows="10"
-        placeholder="请输入术语数据，每行一个"
+        placeholder="请输入术语数据，每行一个（格式：业务术语,数据库字段,表名,分类,说明）"
       />
       
       <template #footer>
         <el-button @click="batchDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleBatchSubmit" :loading="submitting">
+        <el-button type="primary" @click="handleBatchSubmit" :loading="submitting" :disabled="!selectedFile && !batchText.trim()">
           导入
         </el-button>
       </template>
@@ -216,7 +248,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Collection, Plus, Refresh, Upload, Search, Edit, Delete } from '@element-plus/icons-vue'
+import { Collection, Plus, Refresh, Upload, Download, Search, Edit, Delete, UploadFilled } from '@element-plus/icons-vue'
 import * as terminologyAPI from '@/api/terminologies'
 
 const loading = ref(false)
@@ -229,6 +261,8 @@ const categories = ref([])
 const tableNames = ref([])
 const batchText = ref('')
 const formRef = ref(null)
+const uploadRef = ref(null)
+const selectedFile = ref(null)
 
 const searchForm = reactive({
   keyword: '',
@@ -350,38 +384,93 @@ const handleDelete = async (row) => {
 // 批量导入
 const handleBatchImport = () => {
   batchText.value = ''
+  selectedFile.value = null
+  if (uploadRef.value) {
+    uploadRef.value.clearFiles()
+  }
   batchDialogVisible.value = true
+}
+
+// 文件选择变化
+const handleFileChange = (file) => {
+  selectedFile.value = file.raw
+}
+
+// 下载模板
+const handleDownloadTemplate = async () => {
+  try {
+    const res = await terminologyAPI.downloadTerminologyTemplate()
+    // 创建blob对象并下载
+    const blob = new Blob([res.data], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    })
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `术语导入模板_${new Date().toISOString().split('T')[0]}.xlsx`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+    ElMessage.success('模板下载成功')
+  } catch (error) {
+    console.error('下载模板失败:', error)
+    ElMessage.error('下载模板失败')
+  }
 }
 
 // 批量提交
 const handleBatchSubmit = async () => {
-  if (!batchText.value.trim()) {
-    ElMessage.warning('请输入要导入的数据')
+  if (!selectedFile.value && !batchText.value.trim()) {
+    ElMessage.warning('请选择文件或输入要导入的数据')
     return
   }
   
   submitting.value = true
   try {
-    const lines = batchText.value.trim().split('\n').filter(line => line.trim())
-    const terminologies = lines.map(line => {
-      const parts = line.split(',').map(p => p.trim())
-      return {
-        business_term: parts[0] || '',
-        db_field: parts[1] || '',
-        table_name: parts[2] || null,
-        category: parts[3] || null,
-        description: parts[4] || null
+    // 如果上传了文件，使用文件上传
+    if (selectedFile.value) {
+      const formData = new FormData()
+      formData.append('file', selectedFile.value)
+      const res = await terminologyAPI.batchCreateTerminologies(formData)
+      if (res.data.success) {
+        const data = res.data.data
+        let message = `导入完成：成功${data.created_count}个`
+        if (data.skipped_count > 0) {
+          message += `，跳过${data.skipped_count}个`
+        }
+        if (data.errors && data.errors.length > 0) {
+          message += `，失败${data.errors.length}个`
+          console.warn('导入错误:', data.errors)
+        }
+        ElMessage.success(message)
+        batchDialogVisible.value = false
+        loadTerminologies()
       }
-    })
-    
-    const res = await terminologyAPI.batchCreateTerminologies({ terminologies })
-    if (res.data.success) {
-      ElMessage.success(`导入完成：成功${res.data.data.created_count}个，跳过${res.data.data.skipped_count}个`)
-      batchDialogVisible.value = false
-      loadTerminologies()
+    } else {
+      // 使用文本输入
+      const lines = batchText.value.trim().split('\n').filter(line => line.trim())
+      const terminologies = lines.map(line => {
+        const parts = line.split(',').map(p => p.trim())
+        return {
+          business_term: parts[0] || '',
+          db_field: parts[1] || '',
+          table_name: parts[2] || null,
+          category: parts[3] || null,
+          description: parts[4] || null
+        }
+      })
+      
+      const res = await terminologyAPI.batchCreateTerminologies({ terminologies })
+      if (res.data.success) {
+        ElMessage.success(`导入完成：成功${res.data.data.created_count}个，跳过${res.data.data.skipped_count}个`)
+        batchDialogVisible.value = false
+        loadTerminologies()
+      }
     }
   } catch (error) {
     console.error('批量导入失败:', error)
+    ElMessage.error('批量导入失败，请检查文件格式或数据格式')
   } finally {
     submitting.value = false
   }

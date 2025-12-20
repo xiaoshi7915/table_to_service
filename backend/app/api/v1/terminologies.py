@@ -1,7 +1,8 @@
 """
 术语库路由
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Body, Query, UploadFile, File
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field
@@ -10,6 +11,9 @@ from app.models import User, Terminology
 from app.schemas import ResponseModel
 from app.core.security import get_current_active_user
 from loguru import logger
+import io
+from datetime import datetime
+from urllib.parse import quote
 
 
 router = APIRouter(prefix="/api/v1/terminologies", tags=["术语配置"])
@@ -110,6 +114,136 @@ async def list_terminologies(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取术语列表失败: {str(e)}"
+        )
+
+
+@router.get("/template")
+async def download_template(
+    current_user: User = Depends(get_current_active_user)
+):
+    """下载术语批量导入模板（Excel格式）"""
+    try:
+        # 尝试使用openpyxl
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, Alignment, PatternFill
+            
+            # 创建工作簿
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "术语导入模板"
+            
+            # 设置表头
+            headers = ["业务术语", "数据库字段", "表名", "说明", "分类"]
+            header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+            header_font = Font(bold=True, color="FFFFFF")
+            
+            for col_idx, header in enumerate(headers, 1):
+                cell = ws.cell(row=1, column=col_idx, value=header)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            
+            # 添加示例数据
+            examples = [
+                ["销售量", "sales_amount", "sales", "销售金额", "销售类"],
+                ["订单数", "order_count", "orders", "订单数量", "订单类"],
+                ["用户数", "user_count", "users", "用户数量", "用户类"]
+            ]
+            
+            for row_idx, example in enumerate(examples, 2):
+                for col_idx, value in enumerate(example, 1):
+                    ws.cell(row=row_idx, column=col_idx, value=value)
+            
+            # 自动调整列宽
+            for col_idx in range(1, len(headers) + 1):
+                max_length = 0
+                for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=col_idx, max_col=col_idx):
+                    for cell in row:
+                        try:
+                            if cell.value and len(str(cell.value)) > max_length:
+                                max_length = len(str(cell.value))
+                        except:
+                            pass
+                adjusted_width = min(max_length + 2, 50)
+                ws.column_dimensions[ws.cell(row=1, column=col_idx).column_letter].width = adjusted_width
+            
+            # 保存到内存
+            output = io.BytesIO()
+            wb.save(output)
+            output.seek(0)
+            
+            filename = f"术语导入模板_{datetime.now().strftime('%Y%m%d')}.xlsx"
+            # 使用RFC 5987格式编码中文文件名
+            encoded_filename = quote(filename, safe='')
+            
+            return StreamingResponse(
+                io.BytesIO(output.read()),
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
+            )
+            
+        except ImportError:
+            # 如果没有openpyxl，使用xlsxwriter
+            try:
+                import xlsxwriter
+                
+                output = io.BytesIO()
+                workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+                worksheet = workbook.add_worksheet('术语导入模板')
+                
+                # 设置标题样式
+                header_format = workbook.add_format({
+                    'bold': True,
+                    'bg_color': '#366092',
+                    'font_color': '#FFFFFF',
+                    'align': 'center',
+                    'valign': 'vcenter'
+                })
+                
+                # 写入表头
+                headers = ["业务术语", "数据库字段", "表名", "说明", "分类"]
+                for col_idx, header in enumerate(headers):
+                    worksheet.write(0, col_idx, header, header_format)
+                
+                # 添加示例数据
+                examples = [
+                    ["销售量", "sales_amount", "sales", "销售金额", "销售类"],
+                    ["订单数", "order_count", "orders", "订单数量", "订单类"],
+                    ["用户数", "user_count", "users", "用户数量", "用户类"]
+                ]
+                
+                for row_idx, example in enumerate(examples, 1):
+                    for col_idx, value in enumerate(example):
+                        worksheet.write(row_idx, col_idx, value)
+                
+                # 自动调整列宽
+                for col_idx in range(len(headers)):
+                    worksheet.set_column(col_idx, col_idx, 20)
+                
+                workbook.close()
+                output.seek(0)
+                
+                filename = f"术语导入模板_{datetime.now().strftime('%Y%m%d')}.xlsx"
+                # 使用RFC 5987格式编码中文文件名
+                encoded_filename = quote(filename, safe='')
+                
+                return StreamingResponse(
+                    io.BytesIO(output.read()),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
+                )
+            except ImportError:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Excel导出功能需要安装openpyxl或xlsxwriter库"
+                )
+                
+    except Exception as e:
+        logger.error(f"下载术语模板失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"下载模板失败: {str(e)}"
         )
 
 
@@ -301,17 +435,91 @@ async def delete_terminology(
 
 @router.post("/batch", response_model=ResponseModel)
 async def batch_create_terminologies(
-    batch_data: TerminologyBatchCreate = Body(...),
+    file: Optional[UploadFile] = File(None),
+    batch_data: Optional[TerminologyBatchCreate] = Body(None),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_local_db)
 ):
-    """批量创建术语"""
+    """批量创建术语（支持Excel/JSON文件上传或JSON数据）"""
     try:
+        terminologies_to_create = []
+        
+        # 如果上传了文件
+        if file:
+            file_extension = file.filename.split('.')[-1].lower() if file.filename else ''
+            
+            if file_extension == 'json':
+                # 解析JSON文件
+                import json
+                content = await file.read()
+                data = json.loads(content.decode('utf-8'))
+                
+                if isinstance(data, list):
+                    terminologies_to_create = [TerminologyCreate(**item) for item in data]
+                elif isinstance(data, dict) and 'terminologies' in data:
+                    terminologies_to_create = [TerminologyCreate(**item) for item in data['terminologies']]
+                else:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="JSON格式错误，应为数组或包含'terminologies'字段的对象"
+                    )
+                    
+            elif file_extension in ['xlsx', 'xls']:
+                # 解析Excel文件
+                try:
+                    import pandas as pd
+                    content = await file.read()
+                    df = pd.read_excel(io.BytesIO(content))
+                    
+                    # 验证必需的列
+                    required_columns = ['业务术语', '数据库字段']
+                    missing_columns = [col for col in required_columns if col not in df.columns]
+                    if missing_columns:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"Excel文件缺少必需的列: {', '.join(missing_columns)}"
+                        )
+                    
+                    # 转换为TerminologyCreate对象
+                    for _, row in df.iterrows():
+                        terminologies_to_create.append(TerminologyCreate(
+                            business_term=str(row['业务术语']) if pd.notna(row['业务术语']) else '',
+                            db_field=str(row['数据库字段']) if pd.notna(row['数据库字段']) else '',
+                            table_name=str(row['表名']) if '表名' in df.columns and pd.notna(row.get('表名')) else None,
+                            description=str(row['说明']) if '说明' in df.columns and pd.notna(row.get('说明')) else None,
+                            category=str(row['分类']) if '分类' in df.columns and pd.notna(row.get('分类')) else None
+                        ))
+                        
+                except ImportError:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Excel解析需要安装pandas和openpyxl库"
+                    )
+                except Exception as e:
+                    logger.error(f"解析Excel文件失败: {e}", exc_info=True)
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Excel文件解析失败: {str(e)}"
+                    )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="不支持的文件格式，请上传Excel(.xlsx/.xls)或JSON(.json)文件"
+                )
+        # 如果提供了JSON数据
+        elif batch_data:
+            terminologies_to_create = batch_data.terminologies
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="请提供文件或JSON数据"
+            )
+        
         created_count = 0
         skipped_count = 0
         errors = []
         
-        for term_data in batch_data.terminologies:
+        for term_data in terminologies_to_create:
             try:
                 # 检查是否已存在
                 existing = db.query(Terminology).filter(

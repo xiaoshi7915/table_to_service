@@ -28,14 +28,30 @@ export const deleteTerminology = (id) => {
   return api.delete(`/terminologies/${id}`)
 }
 
-// 批量创建术语
+// 批量创建术语（支持文件上传或JSON数据）
 export const batchCreateTerminologies = (data) => {
+  // 如果是FormData（文件上传），使用multipart/form-data
+  if (data instanceof FormData) {
+    return api.post('/terminologies/batch', data, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+  }
+  // 否则使用JSON格式
   return api.post('/terminologies/batch', data)
 }
 
 // 获取分类列表
 export const getCategories = () => {
   return api.get('/terminologies/categories/list')
+}
+
+// 下载术语导入模板
+export const downloadTerminologyTemplate = () => {
+  return api.get('/terminologies/template', {
+    responseType: 'blob'
+  })
 }
 
 

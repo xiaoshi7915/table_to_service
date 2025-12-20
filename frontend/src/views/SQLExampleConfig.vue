@@ -15,6 +15,14 @@
               <el-icon><Plus /></el-icon>
               添加示例
             </el-button>
+            <el-button @click="handleBatchImport" class="action-btn">
+              <el-icon><Upload /></el-icon>
+              批量导入
+            </el-button>
+            <el-button @click="handleDownloadTemplate" class="action-btn">
+              <el-icon><Download /></el-icon>
+              下载模板
+            </el-button>
             <el-button @click="loadExamples" :loading="loading" class="action-btn">
               <el-icon><Refresh /></el-icon>
               刷新
@@ -215,23 +223,77 @@
         <el-descriptions-item label="说明" :span="2">{{ viewData.description || '-' }}</el-descriptions-item>
       </el-descriptions>
     </el-dialog>
+    
+    <!-- 批量导入对话框 -->
+    <el-dialog
+      v-model="batchDialogVisible"
+      title="批量导入SQL示例"
+      width="600px"
+    >
+      <el-alert
+        title="导入格式说明"
+        type="info"
+        :closable="false"
+        style="margin-bottom: 20px"
+      >
+        <template #default>
+          <div>支持Excel(.xlsx/.xls)或JSON(.json)格式文件</div>
+          <div style="margin-top: 10px; color: #909399; font-size: 12px">
+            Excel格式：必须包含列：标题、问题、SQL语句、数据库类型（可选：表名、说明、推荐图表类型）
+          </div>
+          <div style="margin-top: 5px; color: #909399; font-size: 12px">
+            JSON格式：数组格式，每个对象包含title、question、sql_statement、db_type等字段
+          </div>
+        </template>
+      </el-alert>
+      
+      <el-upload
+        ref="uploadRef"
+        :auto-upload="false"
+        :on-change="handleFileChange"
+        :limit="1"
+        accept=".xlsx,.xls,.json"
+        drag
+      >
+        <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
+        <div class="el-upload__text">
+          将文件拖到此处，或<em>点击上传</em>
+        </div>
+        <template #tip>
+          <div class="el-upload__tip">
+            只能上传Excel或JSON文件
+          </div>
+        </template>
+      </el-upload>
+      
+      <template #footer>
+        <el-button @click="batchDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleBatchSubmit" :loading="submitting" :disabled="!selectedFile">
+          导入
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { DocumentCopy, Plus, Refresh, Search, View, Edit, Delete } from '@element-plus/icons-vue'
+import { DocumentCopy, Plus, Refresh, Upload, Download, Search, View, Edit, Delete, UploadFilled } from '@element-plus/icons-vue'
 import * as sqlExampleAPI from '@/api/sqlExamples'
 
 const loading = ref(false)
 const submitting = ref(false)
 const dialogVisible = ref(false)
 const viewDialogVisible = ref(false)
+const batchDialogVisible = ref(false)
 const dialogTitle = ref('添加SQL示例')
 const examples = ref([])
 const viewData = ref({})
 const formRef = ref(null)
+const fileInputRef = ref(null)
+const uploadRef = ref(null)
+const selectedFile = ref(null)
 
 const searchForm = reactive({
   keyword: '',
@@ -401,6 +463,75 @@ const resetForm = () => {
     chart_type: '',
     description: ''
   })
+}
+
+// 批量导入
+const handleBatchImport = () => {
+  selectedFile.value = null
+  if (uploadRef.value) {
+    uploadRef.value.clearFiles()
+  }
+  batchDialogVisible.value = true
+}
+
+// 文件选择变化
+const handleFileChange = (file) => {
+  selectedFile.value = file.raw
+}
+
+// 批量提交
+const handleBatchSubmit = async () => {
+  if (!selectedFile.value) {
+    ElMessage.warning('请选择要导入的文件')
+    return
+  }
+  
+  submitting.value = true
+  try {
+    const res = await sqlExampleAPI.batchCreateSQLExamples(selectedFile.value)
+    if (res.data.success) {
+      const data = res.data.data
+      let message = `导入完成：成功${data.created_count}个`
+      if (data.skipped_count > 0) {
+        message += `，跳过${data.skipped_count}个`
+      }
+      if (data.errors && data.errors.length > 0) {
+        message += `，失败${data.errors.length}个`
+        console.warn('导入错误:', data.errors)
+      }
+      ElMessage.success(message)
+      batchDialogVisible.value = false
+      loadExamples()
+    }
+  } catch (error) {
+    console.error('批量导入失败:', error)
+    ElMessage.error('批量导入失败，请检查文件格式')
+  } finally {
+    submitting.value = false
+  }
+}
+
+// 下载模板
+const handleDownloadTemplate = async () => {
+  try {
+    const res = await sqlExampleAPI.downloadSQLExampleTemplate()
+    // 创建blob对象并下载
+    const blob = new Blob([res.data], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    })
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `SQL示例导入模板_${new Date().toISOString().split('T')[0]}.xlsx`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+    ElMessage.success('模板下载成功')
+  } catch (error) {
+    console.error('下载模板失败:', error)
+    ElMessage.error('下载模板失败')
+  }
 }
 
 onMounted(() => {
