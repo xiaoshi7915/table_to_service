@@ -3,6 +3,7 @@
 使用LangChain的PGVector实现
 """
 import warnings
+import threading
 from typing import List, Optional, Dict, Any
 
 # 抑制 PGVector 弃用警告（如果使用旧版本）
@@ -43,6 +44,47 @@ class VectorStoreUnavailableError(Exception):
 class PGVectorStore:
     """基于pgvector的向量存储"""
     
+    # 缓存AnalyticDB检测结果（类变量）
+    _analyticdb_cache: Dict[str, bool] = {}
+    _analyticdb_cache_lock = threading.Lock()
+    
+    @classmethod
+    def _is_analyticdb(cls, connection_string: str) -> bool:
+        """
+        检查是否是AnalyticDB PostgreSQL（带缓存）
+        
+        Args:
+            connection_string: PostgreSQL连接字符串
+            
+        Returns:
+            是否是AnalyticDB
+        """
+        # 检查缓存
+        with cls._analyticdb_cache_lock:
+            if connection_string in cls._analyticdb_cache:
+                return cls._analyticdb_cache[connection_string]
+        
+        # 未缓存，进行检测
+        is_analyticdb = False
+        try:
+            from sqlalchemy import create_engine, text
+            temp_engine = create_engine(connection_string)
+            with temp_engine.connect() as conn:
+                result = conn.execute(text("SELECT version()"))
+                version_str = result.scalar() or ""
+                if "Greenplum" in version_str or "AnalyticDB" in version_str:
+                    is_analyticdb = True
+                    logger.info(f"检测到 AnalyticDB PostgreSQL (Greenplum)，将使用 FastANN 向量检索引擎")
+            temp_engine.dispose()
+        except Exception as e:
+            logger.debug(f"AnalyticDB检测失败: {e}")
+        
+        # 缓存结果
+        with cls._analyticdb_cache_lock:
+            cls._analyticdb_cache[connection_string] = is_analyticdb
+        
+        return is_analyticdb
+    
     def __init__(
         self,
         connection_string: str,
@@ -62,21 +104,8 @@ class PGVectorStore:
         self.collection_name = collection_name
         
         try:
-            # 检查是否是 AnalyticDB PostgreSQL (Greenplum)
-            # AnalyticDB 使用 FastANN 向量检索引擎，支持 vector 类型但不需要 pgvector 扩展
-            is_analyticdb = False
-            try:
-                from sqlalchemy import create_engine, text, inspect
-                temp_engine = create_engine(connection_string)
-                with temp_engine.connect() as conn:
-                    result = conn.execute(text("SELECT version()"))
-                    version_str = result.scalar() or ""
-                    if "Greenplum" in version_str or "AnalyticDB" in version_str:
-                        is_analyticdb = True
-                        logger.info(f"检测到 AnalyticDB PostgreSQL (Greenplum)，将使用 FastANN 向量检索引擎")
-                temp_engine.dispose()
-            except:
-                pass
+            # 检查是否是 AnalyticDB PostgreSQL (Greenplum)（使用缓存）
+            is_analyticdb = self._is_analyticdb(connection_string)
             
             # 如果是 AnalyticDB，手动创建 LangChain PGVector 需要的表结构（带分布键）
             if is_analyticdb:
@@ -302,7 +331,38 @@ class PGVectorStore:
 
 
 class VectorStoreManager:
-    """向量存储管理器"""
+    """向量存储管理器（单例模式）"""
+    
+    _instance = None
+    _instances = {}  # 按连接字符串和嵌入服务缓存实例
+    _lock = threading.Lock()
+    
+    def __new__(
+        cls,
+        connection_string: str,
+        embedding_service: Embeddings
+    ):
+        """
+        单例模式：根据连接字符串和嵌入服务返回唯一实例
+        
+        Args:
+            connection_string: PostgreSQL连接字符串
+            embedding_service: 嵌入服务
+            
+        Returns:
+            VectorStoreManager实例
+        """
+        # 使用连接字符串和嵌入服务ID作为缓存键
+        # 嵌入服务通常是单例，使用其类型和ID
+        embedding_id = id(embedding_service) if hasattr(embedding_service, '__class__') else str(embedding_service)
+        cache_key = f"{connection_string}:{embedding_id}"
+        
+        with cls._lock:
+            if cache_key not in cls._instances:
+                instance = super().__new__(cls)
+                instance._initialized = False
+                cls._instances[cache_key] = instance
+            return cls._instances[cache_key]
     
     def __init__(
         self,
@@ -310,12 +370,16 @@ class VectorStoreManager:
         embedding_service: Embeddings
     ):
         """
-        初始化管理器
+        初始化管理器（仅在首次初始化时执行）
         
         Args:
             connection_string: PostgreSQL连接字符串
             embedding_service: 嵌入服务
         """
+        # 避免重复初始化
+        if hasattr(self, '_initialized') and self._initialized:
+            return
+        
         self.connection_string = connection_string
         self.embedding_service = embedding_service
         
@@ -340,6 +404,9 @@ class VectorStoreManager:
                 # 其他错误，记录但不阻止初始化
                 logger.warning(f"初始化向量存储 {store_type} 失败: {e}，将使用简化检索模式")
                 self.stores[store_type] = None
+        
+        self._initialized = True
+        logger.info("✅ 向量存储管理器初始化完成（单例模式）")
     
     def get_store(self, store_type: str) -> Optional[PGVectorStore]:
         """

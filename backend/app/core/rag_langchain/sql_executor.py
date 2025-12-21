@@ -263,18 +263,26 @@ class SQLExecutor:
             if re.search(r'SELECT\s+\*', sql_upper):
                 raise ValueError("为了数据安全和性能考虑，不允许查询所有数据明细。请添加WHERE条件、LIMIT限制或使用聚合函数（如COUNT、SUM等）进行统计查询。")
         
-        # 检查SQL注入模式
+        # 检查SQL注入模式（更精确的检测，减少误报）
+        # 注意：这些模式需要更精确，避免误判合法的SQL语句
         sql_injection_patterns = [
-            r"';.*--",
-            r"';.*#",
-            r"UNION.*SELECT",
-            r"xp_cmdshell",
-            r"LOAD_FILE",
-            r"INTO.*OUTFILE"
+            # 检测SQL注释注入（'; -- 或 '; #）
+            r"';\s*--",  # 单引号后跟分号和注释
+            r"';\s*#",   # 单引号后跟分号和#注释
+            # 检测UNION注入（必须是UNION后直接跟SELECT，且不在合法上下文中）
+            r"\bUNION\s+ALL\s+SELECT\s+.*FROM\s+information_schema",  # 信息泄露
+            r"\bUNION\s+SELECT\s+.*FROM\s+sys\.",  # 系统表访问
+            # 检测危险函数调用
+            r"\bxp_cmdshell\s*\(",  # SQL Server命令执行
+            r"\bLOAD_FILE\s*\(",     # MySQL文件读取
+            r"\bINTO\s+OUTFILE",    # MySQL文件写入（但需要更精确，避免误判SELECT INTO）
         ]
         
         for pattern in sql_injection_patterns:
             if re.search(pattern, sql_upper, re.IGNORECASE):
+                # 记录详细的SQL片段以便调试
+                match = re.search(pattern, sql_upper, re.IGNORECASE)
+                logger.warning(f"检测到潜在的SQL注入模式: {pattern}, SQL片段: {sql[match.start():match.end()+50] if match else 'N/A'}")
                 raise ValueError("检测到潜在的SQL注入攻击")
     
     def _parameterize_sql(self, sql: str, params: Dict[str, Any], adapter) -> Tuple[str, Dict[str, Any]]:

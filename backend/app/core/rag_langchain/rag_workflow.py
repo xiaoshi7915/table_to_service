@@ -22,6 +22,7 @@ from loguru import logger
 
 from app.models import DatabaseConfig
 from .schema_service import SchemaService
+from app.core.performance_monitor import track_time
 # 延迟导入rag_chain，避免循环依赖
 # from .rag_chain import SQLRAGChain
 
@@ -63,7 +64,7 @@ class RAGWorkflow:
         terminology_retriever: BaseRetriever,
         sql_example_retriever: BaseRetriever,
         knowledge_retriever: BaseRetriever,
-        max_retries: int = 3
+        max_retries: int = 2  # 减少最大重试次数从3到2
     ):
         """
         初始化RAG工作流
@@ -336,79 +337,79 @@ class RAGWorkflow:
             })
         
         try:
-            # 使用LLM生成SQL
+            # 使用LLM生成SQL（带性能监控）
             prompt = state["prompt"]
             
-            # 调用LLM（使用LangChain标准接口）
-            try:
-                if hasattr(self.llm, 'invoke'):
-                    response = self.llm.invoke(prompt)
-                    sql_raw = response.content if hasattr(response, 'content') else str(response)
-                    
-                    # 检查是否是错误消息
-                    if sql_raw and ("LLM调用失败" in sql_raw or "调用失败" in sql_raw or "LLM客户端未初始化" in sql_raw):
-                        logger.error("LLM返回错误消息: %s", sql_raw[:200])
-                        raise ValueError(f"LLM调用失败: {sql_raw}")
-                elif hasattr(self.llm, '_generate'):
-                    # 使用_generate方法
-                    result = self.llm._generate([prompt])
-                    if result.generations and result.generations[0]:
-                        sql_raw = result.generations[0][0].text
-                        # 检查是否是错误消息
-                        if sql_raw and ("生成失败" in sql_raw or "LLM调用失败" in sql_raw):
-                            raise ValueError(f"LLM生成失败: {sql_raw}")
-                    else:
-                        sql_raw = ""
-                else:
-                    # 降级方案：尝试直接调用
-                    sql_raw = str(self.llm(prompt))
-                    # 检查是否是错误消息
-                    if sql_raw and ("调用失败" in sql_raw or "LLM" in sql_raw):
-                        raise ValueError(f"LLM调用失败: {sql_raw}")
-                
-                # 提取SQL（移除可能的Markdown格式）
-                sql = self._extract_sql(sql_raw)
-                
-                # 修复缺少WITH关键字的CTE
-                sql = self._fix_cte_sql(sql)
-                
-                # 检查SQL是否包含不允许的语句（CREATE、DROP等）
-                # 使用正则表达式匹配单词边界，避免误判字段名（如created_at）
-                import re
-                sql_upper = sql.upper().strip()
-                forbidden_keywords = ["CREATE", "DROP", "ALTER", "INSERT", "UPDATE", "DELETE", "TRUNCATE"]
-                
-                # 使用正则表达式匹配单词边界，确保只匹配SQL关键字，不匹配字段名
-                contains_forbidden = False
-                for keyword in forbidden_keywords:
-                    # 使用\b匹配单词边界，确保是完整的SQL关键字
-                    pattern = r'\b' + re.escape(keyword) + r'\b'
-                    if re.search(pattern, sql_upper):
-                        contains_forbidden = True
-                        logger.warning(f"检测到SQL关键字 {keyword}，SQL预览: {sql[:200]}...")
-                        break
-                
-                if contains_forbidden:
-                    # 如果包含不允许的语句，标记为需要用户手动处理
-                    logger.warning(f"生成的SQL包含不允许的语句: {sql[:200]}...")
-                    state["sql"] = sql  # 保存完整SQL
-                    state["contains_complex_sql"] = True  # 标记为复杂SQL
-                    state["execution_error"] = None  # 不是执行错误，而是需要用户手动处理
-                    state["sql_execution_result"] = None
-                    return state
-                
-                state["sql"] = sql
-                state["contains_complex_sql"] = False
-                
-                # 更新思考步骤
-                state["thinking_steps"][-1]["status"] = "完成"
-                state["thinking_steps"][-1]["message"] = f"SQL生成成功: {sql[:50]}..."
-                
-                logger.info(f"生成SQL: {sql[:100]}...")
-            except Exception as e:
-                logger.error(f"LLM调用失败: {e}", exc_info=True)
-                # 如果LLM调用失败，尝试使用RAG链
+            with track_time("LLM SQL生成", logger):
+                # 调用LLM（使用LangChain标准接口）
                 try:
+                    if hasattr(self.llm, 'invoke'):
+                        response = self.llm.invoke(prompt)
+                        sql_raw = response.content if hasattr(response, 'content') else str(response)
+                        
+                        # 检查是否是错误消息
+                        if sql_raw and ("LLM调用失败" in sql_raw or "调用失败" in sql_raw or "LLM客户端未初始化" in sql_raw):
+                            logger.error("LLM返回错误消息: %s", sql_raw[:200])
+                            raise ValueError(f"LLM调用失败: {sql_raw}")
+                    elif hasattr(self.llm, '_generate'):
+                        # 使用_generate方法
+                        result = self.llm._generate([prompt])
+                        if result.generations and result.generations[0]:
+                            sql_raw = result.generations[0][0].text
+                            # 检查是否是错误消息
+                            if sql_raw and ("生成失败" in sql_raw or "LLM调用失败" in sql_raw):
+                                raise ValueError(f"LLM生成失败: {sql_raw}")
+                        else:
+                            sql_raw = ""
+                    else:
+                        # 降级方案：尝试直接调用
+                        sql_raw = str(self.llm(prompt))
+                        # 检查是否是错误消息
+                        if sql_raw and ("调用失败" in sql_raw or "LLM" in sql_raw):
+                            raise ValueError(f"LLM调用失败: {sql_raw}")
+                    
+                    # 提取SQL（移除可能的Markdown格式）
+                    sql = self._extract_sql(sql_raw)
+                    
+                    # 修复缺少WITH关键字的CTE
+                    sql = self._fix_cte_sql(sql)
+                    
+                    # 检查SQL是否包含不允许的语句（CREATE、DROP等）
+                    # 使用正则表达式匹配单词边界，避免误判字段名（如created_at）
+                    import re
+                    sql_upper = sql.upper().strip()
+                    forbidden_keywords = ["CREATE", "DROP", "ALTER", "INSERT", "UPDATE", "DELETE", "TRUNCATE"]
+                    
+                    # 使用正则表达式匹配单词边界，确保只匹配SQL关键字，不匹配字段名
+                    contains_forbidden = False
+                    for keyword in forbidden_keywords:
+                        # 使用\b匹配单词边界，确保是完整的SQL关键字
+                        pattern = r'\b' + re.escape(keyword) + r'\b'
+                        if re.search(pattern, sql_upper):
+                            contains_forbidden = True
+                            logger.warning(f"检测到SQL关键字 {keyword}，SQL预览: {sql[:200]}...")
+                            break
+                    
+                    if contains_forbidden:
+                        # 如果包含不允许的语句，标记为需要用户手动处理
+                        logger.warning(f"生成的SQL包含不允许的语句: {sql[:200]}...")
+                        state["sql"] = sql  # 保存完整SQL
+                        state["contains_complex_sql"] = True  # 标记为复杂SQL
+                        state["execution_error"] = None  # 不是执行错误，而是需要用户手动处理
+                        state["sql_execution_result"] = None
+                        return state
+                    
+                    state["sql"] = sql
+                    state["contains_complex_sql"] = False
+                    
+                    # 更新思考步骤
+                    state["thinking_steps"][-1]["status"] = "完成"
+                    state["thinking_steps"][-1]["message"] = f"SQL生成成功: {sql[:50]}..."
+                    
+                    logger.info(f"生成SQL: {sql[:100]}...")
+                except Exception as e:
+                    logger.error(f"LLM调用失败: {e}", exc_info=True)
+                    # 如果LLM调用失败，尝试使用RAG链
                     try:
                         from .rag_chain import SQLRAGChain
                     except ImportError as import_err:
@@ -950,7 +951,9 @@ class RAGWorkflow:
         )
         
         try:
-            result = self.workflow.invoke(initial_state)
+            # 执行工作流（带性能监控）
+            with track_time("RAG工作流执行", logger):
+                result = self.workflow.invoke(initial_state)
             
             # 提取最终结果
             final_result = result.get("final_result", {})

@@ -20,6 +20,8 @@ from app.core.llm.factory import LLMFactory
 from app.api.v1.chat_recommendations import generate_dynamic_recommendations
 from app.core.rag_langchain.question_rewriter import QuestionRewriter
 from app.core.performance_monitor import get_performance_monitor, track_time
+from app.core.cache import get_cache_service
+import hashlib
 
 router = APIRouter(prefix="/api/v1/chat", tags=["对话"])
 
@@ -839,30 +841,32 @@ async def send_message(
                 from langchain.schema import Document, BaseRetriever
         
             # 初始化嵌入服务（使用单例模式，避免重复加载模型）
-            embedding_service = None
-            try:
-                embedding_service = ChineseEmbeddingService.get_instance()
-                logger.info("使用中文嵌入模型（bge-base-zh-v1.5，单例模式）")
-            except Exception as e:
-                logger.warning(f"中文嵌入模型加载失败: {e}，将使用传统检索")
-        
-            # 初始化向量存储管理器
-            vector_manager = None
-            if embedding_service:
+            with track_time("嵌入服务初始化", logger):
+                embedding_service = None
                 try:
-                    # 使用本地数据库连接字符串（需要是PostgreSQL）
-                    connection_string = settings.local_database_url
-                    if "postgresql" in connection_string.lower():
-                        vector_manager = VectorStoreManager(connection_string, embedding_service)
-                        logger.info("✅ 向量存储管理器初始化成功（使用pgvector）")
-                    else:
-                        # 非PostgreSQL数据库，向量存储功能不可用，但不影响基本功能
-                        db_type = "MySQL" if "mysql" in connection_string.lower() else "其他数据库"
-                        logger.info(f"ℹ️  向量存储功能需要PostgreSQL数据库（pgvector扩展），当前本地数据库为{db_type}。系统将使用简化检索模式，功能正常但检索精度可能略低")
-                        vector_manager = None
+                    embedding_service = ChineseEmbeddingService.get_instance()
+                    logger.info("使用中文嵌入模型（bge-base-zh-v1.5，单例模式）")
                 except Exception as e:
-                    logger.warning(f"向量存储管理器初始化失败: {e}，将使用简化检索模式")
-                    vector_manager = None
+                    logger.warning(f"中文嵌入模型加载失败: {e}，将使用传统检索")
+            
+            # 初始化向量存储管理器（单例模式，带性能监控）
+            with track_time("向量存储管理器初始化", logger):
+                vector_manager = None
+                if embedding_service:
+                    try:
+                        # 使用本地数据库连接字符串（需要是PostgreSQL）
+                        connection_string = settings.local_database_url
+                        if "postgresql" in connection_string.lower():
+                            vector_manager = VectorStoreManager(connection_string, embedding_service)
+                            logger.info("✅ 向量存储管理器初始化成功（使用pgvector，单例模式）")
+                        else:
+                            # 非PostgreSQL数据库，向量存储功能不可用，但不影响基本功能
+                            db_type = "MySQL" if "mysql" in connection_string.lower() else "其他数据库"
+                            logger.info(f"ℹ️  向量存储功能需要PostgreSQL数据库（pgvector扩展），当前本地数据库为{db_type}。系统将使用简化检索模式，功能正常但检索精度可能略低")
+                            vector_manager = None
+                    except Exception as e:
+                        logger.warning(f"向量存储管理器初始化失败: {e}，将使用简化检索模式")
+                        vector_manager = None
         
             # 创建检索器
             terminology_retriever = None
@@ -873,15 +877,65 @@ async def send_message(
                 try:
                     # 并行加载文档用于BM25检索（优化性能）
                     import concurrent.futures
+                    cache_service = get_cache_service()
                     
-                    # 优化：只查询相关的数据（如果指定了表名）
+                    # 生成缓存键（基于查询条件）
+                    def get_cache_key(prefix: str, selected_tables: List[str], db_type: Optional[str] = None) -> str:
+                        """生成缓存键"""
+                        key_parts = [prefix]
+                        if selected_tables:
+                            key_parts.append("tables:" + ",".join(sorted(selected_tables)))
+                        if db_type:
+                            key_parts.append(f"db_type:{db_type}")
+                        key_str = "|".join(key_parts)
+                        # 使用hash避免键过长
+                        return f"retriever:{prefix}:{hashlib.md5(key_str.encode()).hexdigest()}"
+                    
+                    # 优化：只查询相关的数据（如果指定了表名），带缓存
                     def query_terminologies():
+                        cache_key = get_cache_key("terminologies", selected_tables or [])
+                        # 尝试从缓存获取
+                        cached = cache_service.get(cache_key)
+                        if cached is not None:
+                            logger.debug(f"从缓存获取术语数据: {len(cached)} 条")
+                            # 需要将字典转换回ORM对象（简化处理：直接返回数据，后续转换为Document）
+                            return cached
+                        
+                        # 缓存未命中，查询数据库
                         query = db.query(Terminology)
                         if selected_tables:
                             query = query.filter(Terminology.table_name.in_(selected_tables))
-                        return query.all()
+                        results = query.all()
+                        
+                        # 转换为可序列化的格式（用于缓存）
+                        serializable_results = [
+                            {
+                                "id": t.id,
+                                "business_term": t.business_term,
+                                "description": t.description,
+                                "db_field": t.db_field,
+                                "table_name": t.table_name
+                            }
+                            for t in results
+                        ]
+                        
+                        # 缓存结果（TTL: 5分钟）
+                        cache_service.set(cache_key, serializable_results, ttl=300)
+                        logger.debug(f"缓存术语数据: {len(serializable_results)} 条")
+                        
+                        # 返回序列化数据（字典格式），后续统一处理
+                        return serializable_results
                     
                     def query_sql_examples():
+                        cache_key = get_cache_key("sql_examples", selected_tables or [], db_config.db_type)
+                        # 尝试从缓存获取
+                        cached = cache_service.get(cache_key)
+                        if cached is not None:
+                            logger.debug(f"从缓存获取SQL示例数据: {len(cached)} 条")
+                            # 需要将字典转换回ORM对象（简化处理：直接返回数据，后续转换为Document）
+                            return cached
+                        
+                        # 缓存未命中，查询数据库
                         query = db.query(SQLExample)
                         if selected_tables:
                             query = query.filter(
@@ -891,10 +945,57 @@ async def send_message(
                         # 只查询当前数据库类型的示例
                         if db_config.db_type:
                             query = query.filter(SQLExample.db_type == db_config.db_type)
-                        return query.all()
+                        results = query.all()
+                        
+                        # 转换为可序列化的格式（用于缓存）
+                        serializable_results = [
+                            {
+                                "id": e.id,
+                                "question": e.question,
+                                "description": e.description,
+                                "sql_statement": e.sql_statement,
+                                "db_type": e.db_type,
+                                "table_name": e.table_name
+                            }
+                            for e in results
+                        ]
+                        
+                        # 缓存结果（TTL: 5分钟）
+                        cache_service.set(cache_key, serializable_results, ttl=300)
+                        logger.debug(f"缓存SQL示例数据: {len(serializable_results)} 条")
+                        
+                        # 返回序列化数据（字典格式），后续统一处理
+                        return serializable_results
                     
                     def query_knowledge():
-                        return db.query(BusinessKnowledge).all()
+                        cache_key = get_cache_key("knowledge", [])
+                        # 尝试从缓存获取
+                        cached = cache_service.get(cache_key)
+                        if cached is not None:
+                            logger.debug(f"从缓存获取知识条目数据: {len(cached)} 条")
+                            # 需要将字典转换回ORM对象（简化处理：直接返回数据，后续转换为Document）
+                            return cached
+                        
+                        # 缓存未命中，查询数据库
+                        results = db.query(BusinessKnowledge).all()
+                        
+                        # 转换为可序列化的格式（用于缓存）
+                        serializable_results = [
+                            {
+                                "id": k.id,
+                                "title": k.title,
+                                "content": k.content,
+                                "category": k.category
+                            }
+                            for k in results
+                        ]
+                        
+                        # 缓存结果（TTL: 5分钟）
+                        cache_service.set(cache_key, serializable_results, ttl=300)
+                        logger.debug(f"缓存知识条目数据: {len(serializable_results)} 条")
+                        
+                        # 返回序列化数据（字典格式），后续统一处理
+                        return serializable_results
                     
                     # 使用线程池并行执行查询
                     try:
@@ -913,30 +1014,46 @@ async def send_message(
                         sql_examples = query_sql_examples()
                         knowledge_items = query_knowledge()
                     
-                    # 转换为LangChain Document
-                    term_docs = [
-                        Document(
-                            page_content=f"{t.business_term} {t.description or ''} {t.db_field}",
-                            metadata={"id": t.id, "type": "terminology"}
-                        )
-                        for t in terminologies
-                    ]
+                    # 转换为LangChain Document（处理ORM对象和字典两种格式）
+                    def create_term_doc(item):
+                        if isinstance(item, dict):
+                            return Document(
+                                page_content=f"{item.get('business_term', '')} {item.get('description', '') or ''} {item.get('db_field', '')}",
+                                metadata={"id": item.get('id'), "type": "terminology"}
+                            )
+                        else:
+                            return Document(
+                                page_content=f"{item.business_term} {item.description or ''} {item.db_field}",
+                                metadata={"id": item.id, "type": "terminology"}
+                            )
                     
-                    sql_docs = [
-                        Document(
-                            page_content=f"{e.question} {e.description or ''} {e.sql_statement}",
-                            metadata={"id": e.id, "type": "sql_example", "db_type": e.db_type}
-                        )
-                        for e in sql_examples
-                    ]
+                    def create_sql_doc(item):
+                        if isinstance(item, dict):
+                            return Document(
+                                page_content=f"{item.get('question', '')} {item.get('description', '') or ''} {item.get('sql_statement', '')}",
+                                metadata={"id": item.get('id'), "type": "sql_example", "db_type": item.get('db_type')}
+                            )
+                        else:
+                            return Document(
+                                page_content=f"{item.question} {item.description or ''} {item.sql_statement}",
+                                metadata={"id": item.id, "type": "sql_example", "db_type": item.db_type}
+                            )
                     
-                    knowledge_docs = [
-                        Document(
-                            page_content=f"{k.title} {k.content}",
-                            metadata={"id": k.id, "type": "knowledge", "category": k.category}
-                        )
-                        for k in knowledge_items
-                    ]
+                    def create_knowledge_doc(item):
+                        if isinstance(item, dict):
+                            return Document(
+                                page_content=f"{item.get('title', '')} {item.get('content', '')}",
+                                metadata={"id": item.get('id'), "type": "knowledge", "category": item.get('category')}
+                            )
+                        else:
+                            return Document(
+                                page_content=f"{item.title} {item.content}",
+                                metadata={"id": item.id, "type": "knowledge", "category": item.category}
+                            )
+                    
+                    term_docs = [create_term_doc(t) for t in terminologies]
+                    sql_docs = [create_sql_doc(e) for e in sql_examples]
+                    knowledge_docs = [create_knowledge_doc(k) for k in knowledge_items]
                     
                     # 创建混合检索器（仅在向量存储可用时）
                     if term_docs:
@@ -1282,68 +1399,101 @@ SQL执行失败，错误信息：{execution_error or error}
                     }
                 )
         
-            # 13. 并行执行数据总结和推荐问题生成（优化性能）
-            data_summary = None
-            recommended_questions = []
-        
-            if data and len(data) > 0 and llm_client:
-                # 并行执行数据总结和推荐问题生成
+            # 13. 后台生成数据总结和推荐问题（不阻塞主响应）
+            # 创建后台任务，主响应立即返回
+            async def background_update_message(
+                message_id: int,
+                session_id: int,
+                question: str,
+                sql: str,
+                data_list: List[Dict],
+                selected_tables_list: List[str],
+                llm: Any
+            ):
+                """后台更新消息：生成数据总结和推荐问题"""
                 try:
-                    # 创建任务（协程需要先创建为任务才能并行执行）
-                    data_summary_task = asyncio.create_task(generate_data_summary(
-                        question=request.question,
-                        sql=final_sql,
-                        data=data,
-                        llm_client=llm_client
-                    ))
-                    recommended_questions_task = asyncio.create_task(generate_dynamic_recommendations(
-                        session_id=session_id,
-                        current_question=request.question,
-                        sql=final_sql,
-                        data=data[:10] if data else None,
-                        db=db,
-                        current_user=current_user,
-                        selected_tables=selected_tables,
-                        llm_client=llm_client
-                    ))
-                    
-                    # 并行等待两个任务完成
-                    data_summary, recommended_questions = await asyncio.gather(
-                        data_summary_task,
-                        recommended_questions_task,
-                        return_exceptions=True
-                    )
-                    
-                    # 处理异常
-                    if isinstance(data_summary, Exception):
-                        logger.warning(f"生成数据总结失败: {data_summary}，不影响主流程")
-                        data_summary = None
-                    elif data_summary:
-                        logger.info(f"生成数据总结成功，长度: {len(data_summary)}")
-                    
-                    if isinstance(recommended_questions, Exception):
-                        logger.warning(f"生成动态推荐问题失败: {recommended_questions}，将返回空列表")
-                        recommended_questions = []
-                except Exception as e:
-                    logger.warning(f"并行生成数据总结和推荐问题失败: {e}，不影响主流程")
-                    # 降级：尝试单独生成推荐问题
+                    # 创建新的数据库会话（后台任务需要独立的会话）
+                    from app.core.database import LocalSessionLocal
+                    background_db = LocalSessionLocal()
                     try:
-                        recommended_questions = await generate_dynamic_recommendations(
-                            session_id=session_id,
-                            current_question=request.question,
-                            sql=final_sql,
-                            data=data[:10] if data else None,
-                            db=db,
-                            current_user=current_user,
-                            selected_tables=selected_tables,
-                            llm_client=llm_client
-                        )
-                    except Exception as e2:
-                        logger.warning(f"生成推荐问题失败: {e2}")
+                        # 重新加载消息对象
+                        message = background_db.query(ChatMessage).filter(ChatMessage.id == message_id).first()
+                        if not message:
+                            logger.warning(f"后台任务：消息 {message_id} 不存在")
+                            return
+                        
+                        data_summary = None
                         recommended_questions = []
-        
-            # 15. 保存AI回复（包含数据总结）
-            # 如果有数据总结，将其合并到explanation中
+                        
+                        # 并行生成数据总结和推荐问题
+                        if data_list and len(data_list) > 0 and llm:
+                            try:
+                                data_summary_task = asyncio.create_task(generate_data_summary(
+                                    question=question,
+                                    sql=sql,
+                                    data=data_list,
+                                    llm_client=llm
+                                ))
+                                recommended_questions_task = asyncio.create_task(generate_dynamic_recommendations(
+                                    session_id=session_id,
+                                    current_question=question,
+                                    sql=sql,
+                                    data=data_list[:10] if data_list else None,
+                                    db=background_db,
+                                    current_user=current_user,
+                                    selected_tables=selected_tables_list,
+                                    llm_client=llm
+                                ))
+                                
+                                data_summary, recommended_questions = await asyncio.gather(
+                                    data_summary_task,
+                                    recommended_questions_task,
+                                    return_exceptions=True
+                                )
+                                
+                                # 处理异常
+                                if isinstance(data_summary, Exception):
+                                    logger.warning(f"后台生成数据总结失败: {data_summary}")
+                                    data_summary = None
+                                elif data_summary:
+                                    logger.info(f"后台生成数据总结成功，长度: {len(data_summary)}")
+                                
+                                if isinstance(recommended_questions, Exception):
+                                    logger.warning(f"后台生成推荐问题失败: {recommended_questions}")
+                                    recommended_questions = []
+                            except Exception as e:
+                                logger.warning(f"后台生成数据总结和推荐问题失败: {e}")
+                        
+                        # 更新消息内容（添加数据总结）
+                        if data_summary:
+                            # 在现有内容后添加数据总结
+                            current_content = message.content or ""
+                            if "**数据分析总结：**" not in current_content:
+                                message.content = f"{current_content}\n\n**数据分析总结：**\n{data_summary}"
+                            else:
+                                # 如果已有总结，替换它
+                                import re
+                                message.content = re.sub(
+                                    r'\n\*\*数据分析总结：\*\*.*$',
+                                    f'\n\n**数据分析总结：**\n{data_summary}',
+                                    current_content,
+                                    flags=re.DOTALL
+                                )
+                        
+                        # 保存推荐问题到消息（如果有recommended_questions字段）
+                        if recommended_questions:
+                            # 将推荐问题保存为JSON（如果模型支持）
+                            if hasattr(message, 'recommended_questions'):
+                                message.recommended_questions = json.dumps(recommended_questions, ensure_ascii=False)
+                        
+                        background_db.commit()
+                        logger.info(f"后台任务完成：消息 {message_id} 已更新")
+                    finally:
+                        background_db.close()
+                except Exception as e:
+                    logger.error(f"后台更新消息失败: {e}", exc_info=True)
+            
+            # 15. 保存AI回复（不包含数据总结，数据总结将在后台任务中添加）
             logger.info(f"准备保存AI回复: workflow_result存在={workflow_result is not None}, data长度={len(data) if data else 0}, error={error}, execution_error={execution_error}")
             
             explanation_content = workflow_result.get("explanation") if workflow_result else None
@@ -1357,9 +1507,9 @@ SQL执行失败，错误信息：{execution_error or error}
                     explanation_content = "✅ SQL查询执行成功，查询结果为空（0条数据）。这是正常情况，表示当前查询条件下没有匹配的数据。"
                 logger.info(f"步骤2 - 生成默认explanation_content: {explanation_content}")
             
-            if data_summary:
-                explanation_content = f"{explanation_content}\n\n**数据分析总结：**\n{data_summary}"
-                logger.info(f"步骤3 - 添加数据总结后的explanation_content长度: {len(explanation_content) if explanation_content else 0}")
+            # 注意：不再在这里添加data_summary，将在后台任务中添加
+            # if data_summary:
+            #     explanation_content = f"{explanation_content}\n\n**数据分析总结：**\n{data_summary}"
             
             # 确保content不为None
             if not explanation_content or (isinstance(explanation_content, str) and explanation_content.strip() == ""):
@@ -1384,8 +1534,25 @@ SQL执行失败，错误信息：{execution_error or error}
             )
             db.add(assistant_message)
             
-            # 15. 更新会话时间
+            # 更新会话时间
             session.updated_at = datetime.now()
+            
+            # 提交以获取message_id
+            db.commit()
+            db.refresh(assistant_message)
+            
+            # 启动后台任务更新消息（不阻塞主响应）
+            if data and len(data) > 0 and llm_client:
+                asyncio.create_task(background_update_message(
+                    message_id=assistant_message.id,
+                    session_id=session_id,
+                    question=request.question,
+                    sql=final_sql,
+                    data_list=data,
+                    selected_tables_list=selected_tables,
+                    llm=llm_client
+                ))
+                logger.info(f"后台任务已启动：将在后台生成数据总结和推荐问题，消息ID: {assistant_message.id}")
             
             # 16. 延迟生成对话标题（不阻塞主流程）
             # 查询会话中的用户消息数量（不包括刚创建的用户消息）
@@ -1429,17 +1596,17 @@ SQL执行失败，错误信息：{execution_error or error}
                 # 不等待，让它在后台执行
                 asyncio.create_task(generate_title_background())
             
-            db.commit()
-            db.refresh(assistant_message)
-            
+            # 主响应立即返回，不等待后台任务
+            # 注意：recommended_questions 和 data_summary 将在后台任务中生成并更新到数据库
+            # 前端可以通过轮询消息接口获取更新后的内容
             return ResponseModel(
                 success=True,
                 message="消息发送成功",
                 data={
                     "id": assistant_message.id,
                     "sql": final_sql,
-                    "explanation": explanation_content,  # 包含数据总结的完整解释
-                    "data_summary": data_summary,  # 单独返回数据总结（可选）
+                    "explanation": explanation_content,  # 初始解释（不含数据总结）
+                    "data_summary": None,  # 数据总结将在后台生成
                     "chart_type": chart_config.get("type") if chart_config else None,
                     "chart_config": chart_config,
                     "thinking_steps": workflow_result.get("thinking_steps", []),  # 返回思考步骤
@@ -1448,8 +1615,12 @@ SQL执行失败，错误信息：{execution_error or error}
                     "tokens_used": 0,  # 注意：token使用量统计功能待实现
                     "model": model_config.model_name,
                     "retry_count": workflow_result.get("retry_count", 0),  # 重试次数
-                    "recommended_questions": recommended_questions,  # 动态生成的推荐问题（基于当前会话上下文）
-                    "question_rewrite": question_rewrite_info  # 问题改写信息（如果有）
+                    "recommended_questions": [],  # 推荐问题将在后台生成，前端可通过轮询获取
+                    "question_rewrite": question_rewrite_info,  # 问题改写信息（如果有）
+                    "background_tasks": {
+                        "data_summary": data and len(data) > 0,  # 是否在后台生成数据总结
+                        "recommendations": True  # 是否在后台生成推荐问题
+                    }
                 }
             )
         
