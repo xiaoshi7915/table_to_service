@@ -15,26 +15,43 @@
           <el-icon><DataBoard /></el-icon>
           <span>仪表盘</span>
         </el-menu-item>
+
+        <el-menu-item index="/interface-config">
+          <el-icon><Tools /></el-icon>
+          <span>表转服务</span>
+        </el-menu-item>
+
+        <el-menu-item index="/chat">
+            <el-icon><ChatLineRound /></el-icon>
+            <span>智能问数</span>
+        </el-menu-item>
+
+        <el-menu-item index="/dashboard-list">
+            <el-icon><DataBoard /></el-icon>
+            <span>仪表板</span>
+        </el-menu-item>
         
         <el-menu-item index="/database-config">
           <el-icon><Connection /></el-icon>
           <span>数据源配置</span>
         </el-menu-item>
         
+        <el-sub-menu index="tableService">
+          <template #title>
+            <el-icon><Tools /></el-icon>
+            <span>表转服务</span>
+          </template>
         <el-menu-item index="/interface-list">
           <el-icon><List /></el-icon>
           <span>接口清单</span>
         </el-menu-item>
         
-        <el-menu-item index="/interface-config">
-          <el-icon><Tools /></el-icon>
-          <span>数据表转接口</span>
-        </el-menu-item>
         
         <el-menu-item index="/api-docs">
           <el-icon><Document /></el-icon>
           <span>API文档</span>
         </el-menu-item>
+      </el-sub-menu>
         
         <el-sub-menu index="sqlbot">
           <template #title>
@@ -61,17 +78,9 @@
             <el-icon><Reading /></el-icon>
             <span>业务知识库</span>
           </el-menu-item>
-          <el-menu-item index="/chat">
-            <el-icon><ChatLineRound /></el-icon>
-            <span>智能问数</span>
-          </el-menu-item>
           <el-menu-item index="/chat-history">
             <el-icon><List /></el-icon>
             <span>历史对话</span>
-          </el-menu-item>
-          <el-menu-item index="/dashboard-list">
-            <el-icon><DataBoard /></el-icon>
-            <span>仪表板</span>
           </el-menu-item>
         </el-sub-menu>
       </el-menu>
