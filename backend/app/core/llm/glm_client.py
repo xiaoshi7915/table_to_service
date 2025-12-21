@@ -1,0 +1,137 @@
+"""
+智谱GLM LLM客户端
+使用智谱AI开放平台API
+"""
+from typing import List, Dict, Any, Optional
+import aiohttp
+from loguru import logger
+from app.core.llm.base import BaseLLMClient
+
+
+class GLMClient(BaseLLMClient):
+    """智谱GLM LLM客户端"""
+    
+    def __init__(self, api_key: str, api_base_url: Optional[str] = None, model_name: str = "GLM-4-Plus", **kwargs):
+        """
+        初始化智谱GLM客户端
+        
+        Args:
+            api_key: 智谱AI API密钥
+            api_base_url: API基础URL（默认：https://open.bigmodel.cn/api/paas/v4）
+            model_name: 模型名称（默认：GLM-4-Plus）
+        """
+        super().__init__(api_key, api_base_url, model_name, **kwargs)
+        
+        # 智谱AI的默认API地址
+        self.api_base_url = api_base_url or "https://open.bigmodel.cn/api/paas/v4"
+        
+        # 支持的模型列表
+        self.supported_models = [
+            "GLM-4-Plus",
+            "GLM-4",
+            "GLM-3-Turbo",
+            "GLM-4-Air",
+            "GLM-4-AirX"
+        ]
+        
+        # 如果模型名称不在支持列表中，使用默认模型
+        if model_name not in self.supported_models:
+            logger.warning("模型 %s 可能不受支持，使用默认模型 GLM-4-Plus", model_name)
+            self.model_name = "GLM-4-Plus"
+    
+    async def chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        发送聊天补全请求
+        
+        Args:
+            messages: 消息列表
+            temperature: 温度参数
+            max_tokens: 最大token数
+            **kwargs: 其他参数
+            
+        Returns:
+            响应字典
+        """
+        try:
+            # 预处理消息
+            processed_messages = self._prepare_messages(messages)
+            
+            # 转换消息格式为智谱AI格式（OpenAI兼容）
+            glm_messages = []
+            for msg in processed_messages:
+                glm_messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+            
+            # 构建请求体
+            request_body = {
+                "model": self.model_name,
+                "messages": glm_messages,
+                "temperature": temperature if temperature is not None else self.temperature,
+                "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
+                **kwargs
+            }
+            
+            # 构建请求头
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}"
+            }
+            
+            # 调用API
+            url = f"{self.api_base_url}/chat/completions"
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=request_body, headers=headers) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        raise ValueError(f"智谱GLM API调用失败: HTTP {response.status}, {error_text}")
+                    
+                    result = await response.json()
+                    
+                    # 检查错误
+                    if "error" in result:
+                        error = result["error"]
+                        error_msg = error.get("message", "未知错误")
+                        raise ValueError(f"智谱GLM API错误: {error_msg}")
+                    
+                    # 提取响应内容（OpenAI兼容格式）
+                    choices = result.get("choices", [])
+                    if choices:
+                        content = choices[0].get("message", {}).get("content", "")
+                    else:
+                        content = ""
+                    
+                    usage = result.get("usage", {})
+                    tokens_used = usage.get("total_tokens") if usage else None
+                    
+                    return {
+                        "content": content,
+                        "tokens_used": tokens_used,
+                        "model": self.model_name
+                    }
+                    
+        except Exception as e:
+            logger.error("智谱GLM API调用失败: %s", str(e), exc_info=True)
+            raise ValueError(f"智谱GLM API调用失败: {str(e)}")
+    
+    def count_tokens(self, text: str) -> int:
+        """
+        计算文本的token数量
+        
+        Args:
+            text: 文本内容
+            
+        Returns:
+            token数量（智谱GLM使用简单估算）
+        """
+        # 智谱GLM的token计算：中文约1.5字符=1token，英文约4字符=1token
+        chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+        other_chars = len(text) - chinese_chars
+        return int(chinese_chars / 1.5 + other_chars / 4)

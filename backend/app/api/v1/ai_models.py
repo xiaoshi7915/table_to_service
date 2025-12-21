@@ -1,6 +1,7 @@
 """
 AI模型配置路由
 """
+import time
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
 from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional, List
@@ -11,6 +12,7 @@ from app.schemas import ResponseModel
 from app.core.security import get_current_active_user
 from app.core.password_encryption import encrypt_password, decrypt_password
 from loguru import logger
+import time
 
 
 router = APIRouter(prefix="/api/v1/ai-models", tags=["AI模型配置"])
@@ -27,6 +29,7 @@ class AIModelConfigCreate(BaseModel):
     model_name: str = Field(..., description="具体模型名称")
     max_tokens: int = Field(2000, description="最大token数")
     temperature: str = Field("0.7", description="温度参数")
+    scene: Optional[str] = Field(None, description="使用场景（general/multimodal/code/math/agent/long_context/low_cost/enterprise/education/medical/legal/finance/government/industry/social/roleplay）")
     is_default: bool = Field(False, description="是否设为默认模型")
 
 
@@ -39,6 +42,7 @@ class AIModelConfigUpdate(BaseModel):
     model_name: Optional[str] = None
     max_tokens: Optional[int] = None
     temperature: Optional[str] = None
+    scene: Optional[str] = None
     is_default: Optional[bool] = None
     is_active: Optional[bool] = None
 
@@ -69,6 +73,7 @@ async def list_ai_models(
                 "model_name": model.model_name,
                 "max_tokens": model.max_tokens,
                 "temperature": model.temperature,
+                "scene": model.scene,
                 "is_default": model.is_default,
                 "is_active": model.is_active,
                 "has_api_key": bool(model.api_key),  # 只返回是否配置了密钥
@@ -116,6 +121,7 @@ async def get_ai_model(
                 "model_name": model.model_name,
                 "max_tokens": model.max_tokens,
                 "temperature": model.temperature,
+                "scene": model.scene,
                 "is_default": model.is_default,
                 "is_active": model.is_active,
                 "has_api_key": bool(model.api_key),
@@ -142,12 +148,24 @@ async def create_ai_model(
 ):
     """创建AI模型配置"""
     try:
-        # 验证提供商
-        supported_providers = ["deepseek", "qwen", "kimi"]
+        # 验证提供商（扩展支持更多提供商）
+        from app.core.llm.factory import LLMFactory
+        supported_providers = LLMFactory.get_supported_providers()
         if config_data.provider.lower() not in supported_providers:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"不支持的提供商: {config_data.provider}，支持的提供商: {supported_providers}"
+            )
+        
+        # 验证场景值（如果提供）
+        valid_scenes = ["general", "multimodal", "code", "math", "agent", "long_context", 
+                       "low_cost", "enterprise", "education", "medical", "legal", 
+                       "finance", "government", "industry", "social", "roleplay"]
+        scene = config_data.scene if config_data.scene else "general"
+        if scene not in valid_scenes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"无效的场景值: {scene}，支持的场景: {valid_scenes}"
             )
         
         # 如果设置为默认模型，先取消其他默认模型
@@ -166,6 +184,7 @@ async def create_ai_model(
             model_name=config_data.model_name,
             max_tokens=config_data.max_tokens,
             temperature=config_data.temperature,
+            scene=scene,
             is_default=config_data.is_default,
             is_active=True
         )
@@ -231,6 +250,17 @@ async def update_ai_model(
             update_data["max_tokens"] = config_data.max_tokens
         if config_data.temperature is not None:
             update_data["temperature"] = config_data.temperature
+        if config_data.scene is not None:
+            # 验证场景值
+            valid_scenes = ["general", "multimodal", "code", "math", "agent", "long_context", 
+                           "low_cost", "enterprise", "education", "medical", "legal", 
+                           "finance", "government", "industry", "social", "roleplay"]
+            if config_data.scene not in valid_scenes:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"无效的场景值: {config_data.scene}，支持的场景: {valid_scenes}"
+                )
+            update_data["scene"] = config_data.scene
         if config_data.is_active is not None:
             update_data["is_active"] = config_data.is_active
         
@@ -353,6 +383,103 @@ async def set_default_model(
         )
 
 
+@router.post("/{model_id}/test", response_model=ResponseModel)
+async def test_model_connection(
+    model_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_local_db)
+):
+    """测试AI模型连接"""
+    from app.core.llm.factory import LLMFactory
+    
+    try:
+        model = db.query(AIModelConfig).filter(AIModelConfig.id == model_id).first()
+        
+        if not model:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="AI模型配置不存在"
+            )
+        
+        if not model.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="模型未启用，无法测试"
+            )
+        
+        # 创建客户端实例
+        try:
+            llm_client = LLMFactory.create_client(model)
+        except Exception as e:
+            logger.error(f"创建LLM客户端失败: {e}", exc_info=True)
+            return ResponseModel(
+                success=False,
+                message="连接测试失败",
+                data={
+                    "success": False,
+                    "error": f"创建客户端失败: {str(e)}",
+                    "response_time": None
+                }
+            )
+        
+        # 发送测试消息
+        test_message = "你好"
+        start_time = time.time()
+        
+        try:
+            response = await llm_client.chat_completion(
+                messages=[{"role": "user", "content": test_message}],
+                max_tokens=50  # 测试时使用较小的token数
+            )
+            
+            response_time = time.time() - start_time
+            
+            # 检查响应
+            if response and response.get("content"):
+                return ResponseModel(
+                    success=True,
+                    message="连接测试成功",
+                    data={
+                        "success": True,
+                        "response": response.get("content", "")[:100],  # 只返回前100字符
+                        "response_time": round(response_time, 3),
+                        "tokens_used": response.get("tokens_used"),
+                        "model": response.get("model", model.model_name)
+                    }
+                )
+            else:
+                return ResponseModel(
+                    success=False,
+                    message="连接测试失败",
+                    data={
+                        "success": False,
+                        "error": "响应内容为空",
+                        "response_time": round(response_time, 3)
+                    }
+                )
+        except Exception as e:
+            response_time = time.time() - start_time
+            logger.error(f"测试模型连接失败: {e}", exc_info=True)
+            return ResponseModel(
+                success=False,
+                message="连接测试失败",
+                data={
+                    "success": False,
+                    "error": str(e),
+                    "response_time": round(response_time, 3) if response_time > 0 else None
+                }
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"测试模型连接失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"测试模型连接失败: {str(e)}"
+        )
+
+
 @router.get("/providers/list", response_model=ResponseModel)
 async def list_providers(
     current_user: User = Depends(get_current_active_user)
@@ -363,25 +490,131 @@ async def list_providers(
         
         providers = LLMFactory.get_supported_providers()
         
-        # 提供商说明
+        # 提供商说明（扩展支持更多提供商）
         provider_info = {
             "deepseek": {
                 "name": "DeepSeek",
                 "description": "深度求索AI",
                 "default_model": "deepseek-chat",
-                "api_url": "https://api.deepseek.com"
+                "api_url": "https://api.deepseek.com",
+                "api_key_url": "https://platform.deepseek.com/api_keys",
+                "models": [
+                    {"value": "deepseek-chat", "label": "DeepSeek Chat", "description": "通用对话模型"},
+                    {"value": "deepseek-coder", "label": "DeepSeek Coder", "description": "代码生成模型"}
+                ],
+                "model_types": [
+                    {"value": "llm", "label": "大语言模型"},
+                    {"value": "code", "label": "代码模型"}
+                ],
+                "scenes": ["general", "code", "math"]
             },
             "qwen": {
                 "name": "通义千问",
                 "description": "阿里云通义千问",
                 "default_model": "qwen-turbo",
-                "api_url": "https://dashscope.aliyuncs.com"
+                "api_url": "https://dashscope.aliyuncs.com",
+                "api_key_url": "https://dashscope.console.aliyun.com/apiKey",
+                "models": ["qwen-turbo", "qwen-plus", "qwen-max", "qwen-max-longcontext"],
+                "scenes": ["general", "code", "math", "agent", "long_context"]
             },
             "kimi": {
                 "name": "Kimi",
                 "description": "月之暗面Kimi",
                 "default_model": "moonshot-v1-8k",
-                "api_url": "https://api.moonshot.cn"
+                "api_url": "https://api.moonshot.cn",
+                "api_key_url": "https://platform.moonshot.cn/console/api-keys",
+                "models": ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+                "scenes": ["general", "long_context"]
+            },
+            "ernie": {
+                "name": "百度文心",
+                "description": "百度智能云千帆大模型平台",
+                "default_model": "ERNIE-4.0-8K",
+                "api_url": "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat",
+                "api_key_url": "https://console.bce.baidu.com/qianfan/ais/console/applicationConsole/application",
+                "models": ["ERNIE-4.0-8K", "ERNIE-4.0-8K-0205", "ERNIE-3.5-8K", "ERNIE-3.5-8K-0205"],
+                "scenes": ["general", "multimodal", "enterprise"]
+            },
+            "hunyuan": {
+                "name": "腾讯混元",
+                "description": "腾讯云混元大模型",
+                "default_model": "hunyuan-pro",
+                "api_url": "https://hunyuan.tencentcloudapi.com",
+                "api_key_url": "https://console.cloud.tencent.com/cam/capi",
+                "models": ["hunyuan-pro", "hunyuan-standard", "hunyuan-lite"],
+                "scenes": ["general", "multimodal"]
+            },
+            "doubao": {
+                "name": "字节豆包",
+                "description": "火山引擎豆包大模型",
+                "default_model": "doubao-pro-4k",
+                "api_url": "https://ark.cn-beijing.volces.com/api/v3",
+                "api_key_url": "https://console.volcengine.com/ark/region:ark+cn-beijing/api",
+                "models": ["doubao-pro-4k", "doubao-lite-4k", "doubao-pro-32k", "doubao-lite-32k"],
+                "scenes": ["general", "low_cost"]
+            },
+            "pangu": {
+                "name": "华为盘古",
+                "description": "华为云ModelArts",
+                "default_model": "pangu-sigma",
+                "api_url": "https://modelarts.cn-north-4.myhuaweicloud.com/v1",
+                "api_key_url": "https://console.huaweicloud.com/iam/#/mine/accessKey",
+                "models": ["pangu-sigma", "pangu-alpha"],
+                "scenes": ["enterprise", "government", "industry"]
+            },
+            "glm": {
+                "name": "智谱GLM",
+                "description": "智谱AI开放平台",
+                "default_model": "GLM-4-Plus",
+                "api_url": "https://open.bigmodel.cn/api/paas/v4",
+                "api_key_url": "https://open.bigmodel.cn/usercenter/apikeys",
+                "models": ["GLM-4-Plus", "GLM-4", "GLM-3-Turbo", "GLM-4-Air", "GLM-4-AirX"],
+                "scenes": ["general", "code", "math", "agent"]
+            },
+            "sensetime": {
+                "name": "商汤日日新",
+                "description": "商汤科技开放平台",
+                "default_model": "SenseNova-5.5",
+                "api_url": "https://api.sensenova.cn/v1",
+                "api_key_url": "https://platform.sensenova.cn/",
+                "models": ["SenseNova-5.5", "SenseChat-5", "SenseChat-4"],
+                "scenes": ["multimodal", "enterprise", "finance"]
+            },
+            "spark": {
+                "name": "科大讯飞星火",
+                "description": "讯飞开放平台",
+                "default_model": "Spark-4.0-Ultra",
+                "api_url": "https://spark-api.xf-yun.com/v1",
+                "api_key_url": "https://www.xfyun.cn/console/createApi",
+                "models": ["Spark-4.0-Ultra", "Spark-3.5-Max", "Spark-3.5-Pro", "Spark-3.1"],
+                "scenes": ["education", "medical", "legal"]
+            },
+            "minimax": {
+                "name": "MiniMax",
+                "description": "MiniMax开放平台",
+                "default_model": "abab6.5",
+                "api_url": "https://api.minimax.chat/v1",
+                "api_key_url": "https://platform.minimax.chat/",
+                "models": ["abab6.5", "abab6", "abab5.5"],
+                "scenes": ["social", "roleplay"]
+            },
+            "yi": {
+                "name": "零一万物Yi",
+                "description": "零一万物开放平台",
+                "default_model": "yi-34b-chat",
+                "api_url": "https://api.01.ai/v1",
+                "api_key_url": "https://platform.01.ai/",
+                "models": ["yi-34b-chat", "yi-6b-chat", "yi-34b-chat-200k"],
+                "scenes": ["general"]
+            },
+            "skywork": {
+                "name": "昆仑万维Skywork",
+                "description": "昆仑万维开放平台",
+                "default_model": "skywork-13b-chat",
+                "api_url": "https://api.skywork.ai/v1",
+                "api_key_url": "https://platform.skywork.ai/",
+                "models": ["skywork-13b-chat", "skywork-6b-chat"],
+                "scenes": ["general"]
             }
         }
         
@@ -391,6 +624,16 @@ async def list_providers(
                 result.append({
                     "provider": provider,
                     **provider_info[provider]
+                })
+            else:
+                # 如果提供商不在info中，返回基本信息
+                result.append({
+                    "provider": provider,
+                    "name": provider.upper(),
+                    "description": f"{provider}大模型",
+                    "default_model": "",
+                    "api_url": "",
+                    "scenes": ["general"]
                 })
         
         return ResponseModel(
@@ -404,5 +647,3 @@ async def list_providers(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取提供商列表失败: {str(e)}"
         )
-
-

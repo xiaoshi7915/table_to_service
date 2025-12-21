@@ -56,6 +56,16 @@
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column prop="created_at" label="创建时间" width="180">
+          <template #default="{ row }">
+            {{ formatDateTime(row.created_at) }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="updated_at" label="更新时间" width="180">
+          <template #default="{ row }">
+            {{ formatDateTime(row.updated_at) }}
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
             <el-button size="small" @click="handleTest(row)" :loading="row.testing">
@@ -436,6 +446,10 @@ const handleTest = async (row) => {
     const response = await api.post(`/database-configs/${row.id}/test`)
     if (response.data.success) {
       ElMessage.success('连接测试成功')
+      // 测试成功后自动设置为已激活
+      row.is_active = true
+      // 重新加载配置列表以获取最新的更新时间
+      await loadConfigs()
     } else {
       ElMessage.error(response.data.message || '连接测试失败')
     }
@@ -443,6 +457,24 @@ const handleTest = async (row) => {
     ElMessage.error('连接测试失败')
   } finally {
     row.testing = false
+  }
+}
+
+// 格式化日期时间
+const formatDateTime = (dateTimeStr) => {
+  if (!dateTimeStr) return '-'
+  try {
+    const date = new Date(dateTimeStr)
+    return date.toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    })
+  } catch (error) {
+    return dateTimeStr
   }
 }
 

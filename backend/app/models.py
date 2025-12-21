@@ -175,6 +175,7 @@ class AIModelConfig(Base):
     model_name = Column(String(100), nullable=False, comment="具体模型名称")
     max_tokens = Column(Integer, default=2000, comment="最大token数")
     temperature = Column(String(10), default="0.7", comment="温度参数")
+    scene = Column(String(100), nullable=True, comment="使用场景（general/multimodal/code/math/agent/long_context/low_cost/enterprise/education/medical/legal/finance/government/industry/social/roleplay）")
     is_default = Column(Boolean, default=False, comment="是否默认模型")
     is_active = Column(Boolean, default=True, comment="是否启用")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")

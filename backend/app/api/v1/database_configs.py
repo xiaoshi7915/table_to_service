@@ -350,6 +350,10 @@ async def test_connection_direct(
                 conn.execute(text(test_sql))
             engine.dispose()
             
+            # 测试成功后，自动将配置设置为已激活
+            config.is_active = True
+            db.commit()
+            
             return ResponseModel(
                 success=True,
                 message="连接成功"
@@ -427,6 +431,10 @@ async def test_connection(
             with engine.connect() as conn:
                 conn.execute(text(test_sql))
             engine.dispose()
+            
+            # 测试成功后，自动将配置设置为已激活
+            config.is_active = True
+            db.commit()
             
             return ResponseModel(
                 success=True,

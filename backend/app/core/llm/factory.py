@@ -8,6 +8,16 @@ from app.core.llm.base import BaseLLMClient
 from app.core.llm.deepseek_client import DeepSeekClient
 from app.core.llm.qwen_client import QwenClient
 from app.core.llm.kimi_client import KimiClient
+from app.core.llm.ernie_client import ErnieClient
+from app.core.llm.hunyuan_client import HunyuanClient
+from app.core.llm.doubao_client import DoubaoClient
+from app.core.llm.pangu_client import PanguClient
+from app.core.llm.glm_client import GLMClient
+from app.core.llm.sensetime_client import SenseTimeClient
+from app.core.llm.spark_client import SparkClient
+from app.core.llm.minimax_client import MiniMaxClient
+from app.core.llm.yi_client import YiClient
+from app.core.llm.skywork_client import SkyworkClient
 from app.models import AIModelConfig
 from app.core.password_encryption import decrypt_password
 
@@ -20,7 +30,16 @@ class LLMFactory:
         "deepseek": DeepSeekClient,
         "qwen": QwenClient,
         "kimi": KimiClient,
-        # 可以继续添加其他提供商
+        "ernie": ErnieClient,
+        "hunyuan": HunyuanClient,
+        "doubao": DoubaoClient,
+        "pangu": PanguClient,
+        "glm": GLMClient,
+        "sensetime": SenseTimeClient,
+        "spark": SparkClient,
+        "minimax": MiniMaxClient,
+        "yi": YiClient,
+        "skywork": SkyworkClient,
     }
     
     @classmethod

@@ -19,6 +19,7 @@ python-multipart>=0.0.6  # 文件上传支持（FastAPI Form data）
 openai>=1.0.0  # 支持OpenAI兼容的API（包括DeepSeek）
 dashscope>=1.14.0,<2.0.0  # 通义千问
 httpx>=0.25.1,<1.0.0  # HTTP客户端
+aiohttp>=3.9.0  # 异步HTTP客户端（用于大模型API调用）
 tiktoken>=0.5.0  # Token计数
 pandas>=2.2.3,<3.0.0  # 数据处理
 openpyxl>=3.1.5,<4.0.0  # Excel导出
