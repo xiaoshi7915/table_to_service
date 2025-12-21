@@ -26,7 +26,10 @@ def _execute_task_async(task_id: int, db: Session):
     except Exception as e:
         logger.error(f"异步执行探查任务失败: {e}", exc_info=True)
         # 更新任务状态为失败
-        task = db.query(ProbeTask).filter(ProbeTask.id == task_id).first()
+        task = db.query(ProbeTask).filter(
+            ProbeTask.id == task_id,
+            ProbeTask.is_deleted == False
+        ).first()
         if task:
             task.status = "failed"
             task.error_message = str(e)
@@ -47,7 +50,10 @@ async def list_tasks(
 ):
     """获取探查任务列表（支持搜索、分页、筛选）"""
     try:
-        query = db.query(ProbeTask).filter(ProbeTask.user_id == current_user.id)
+        query = db.query(ProbeTask).filter(
+            ProbeTask.user_id == current_user.id,
+            ProbeTask.is_deleted == False
+        )
         
         # 搜索
         if search:
@@ -75,7 +81,10 @@ async def list_tasks(
         # 获取关联的数据源信息
         result = []
         for task in tasks:
-            db_config = db.query(DatabaseConfig).filter(DatabaseConfig.id == task.database_config_id).first()
+            db_config = db.query(DatabaseConfig).filter(
+                DatabaseConfig.id == task.database_config_id,
+                DatabaseConfig.is_deleted == False
+            ).first()
             result.append({
                 "id": task.id,
                 "task_name": task.task_name,
@@ -282,11 +291,15 @@ async def delete_task(
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
         
+        if task.is_deleted:
+            raise HTTPException(status_code=404, detail="任务已被删除")
+        
         # 运行中的任务不能删除
         if task.status == "running":
             raise HTTPException(status_code=400, detail="运行中的任务不能删除，请先停止")
         
-        db.delete(task)
+        # 软删除
+        task.is_deleted = True
         db.commit()
         
         return ResponseModel(

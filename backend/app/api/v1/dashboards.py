@@ -67,7 +67,10 @@ async def list_dashboards(
 ):
     """获取仪表板列表"""
     try:
-        query = db.query(Dashboard).filter(Dashboard.user_id == current_user.id)
+        query = db.query(Dashboard).filter(
+            Dashboard.user_id == current_user.id,
+            Dashboard.is_deleted == False
+        )
         
         # 关键词搜索
         if keyword:
@@ -161,7 +164,8 @@ async def get_dashboard(
     try:
         dashboard = db.query(Dashboard).filter(
             Dashboard.id == dashboard_id,
-            Dashboard.user_id == current_user.id
+            Dashboard.user_id == current_user.id,
+            Dashboard.is_deleted == False
         ).first()
         
         if not dashboard:
@@ -230,7 +234,8 @@ async def update_dashboard(
     try:
         dashboard = db.query(Dashboard).filter(
             Dashboard.id == dashboard_id,
-            Dashboard.user_id == current_user.id
+            Dashboard.user_id == current_user.id,
+            Dashboard.is_deleted == False
         ).first()
         
         if not dashboard:
@@ -275,13 +280,23 @@ async def delete_dashboard(
     try:
         dashboard = db.query(Dashboard).filter(
             Dashboard.id == dashboard_id,
-            Dashboard.user_id == current_user.id
+            Dashboard.user_id == current_user.id,
+            Dashboard.is_deleted == False
         ).first()
         
         if not dashboard:
             raise HTTPException(status_code=404, detail="仪表板不存在")
         
-        db.delete(dashboard)
+        if dashboard.is_deleted:
+            raise HTTPException(status_code=404, detail="仪表板已被删除")
+        
+        # 软删除仪表板及其组件
+        dashboard.is_deleted = True
+        # 同时软删除所有组件
+        db.query(DashboardWidget).filter(
+            DashboardWidget.dashboard_id == dashboard_id,
+            DashboardWidget.is_deleted == False
+        ).update({"is_deleted": True}, synchronize_session=False)
         db.commit()
         
         return ResponseModel(
@@ -309,7 +324,8 @@ async def create_widget(
         # 验证仪表板
         dashboard = db.query(Dashboard).filter(
             Dashboard.id == dashboard_id,
-            Dashboard.user_id == current_user.id
+            Dashboard.user_id == current_user.id,
+            Dashboard.is_deleted == False
         ).first()
         
         if not dashboard:
@@ -374,7 +390,8 @@ async def update_widget(
         # 验证仪表板
         dashboard = db.query(Dashboard).filter(
             Dashboard.id == dashboard_id,
-            Dashboard.user_id == current_user.id
+            Dashboard.user_id == current_user.id,
+            Dashboard.is_deleted == False
         ).first()
         
         if not dashboard:
@@ -382,7 +399,8 @@ async def update_widget(
         
         widget = db.query(DashboardWidget).filter(
             DashboardWidget.id == widget_id,
-            DashboardWidget.dashboard_id == dashboard_id
+            DashboardWidget.dashboard_id == dashboard_id,
+            DashboardWidget.is_deleted == False
         ).first()
         
         if not widget:
@@ -433,7 +451,8 @@ async def delete_widget(
         # 验证仪表板
         dashboard = db.query(Dashboard).filter(
             Dashboard.id == dashboard_id,
-            Dashboard.user_id == current_user.id
+            Dashboard.user_id == current_user.id,
+            Dashboard.is_deleted == False
         ).first()
         
         if not dashboard:
@@ -441,13 +460,18 @@ async def delete_widget(
         
         widget = db.query(DashboardWidget).filter(
             DashboardWidget.id == widget_id,
-            DashboardWidget.dashboard_id == dashboard_id
+            DashboardWidget.dashboard_id == dashboard_id,
+            DashboardWidget.is_deleted == False
         ).first()
         
         if not widget:
             raise HTTPException(status_code=404, detail="组件不存在")
         
-        db.delete(widget)
+        if widget.is_deleted:
+            raise HTTPException(status_code=404, detail="组件已被删除")
+        
+        # 软删除
+        widget.is_deleted = True
         db.commit()
         
         return ResponseModel(

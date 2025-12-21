@@ -57,7 +57,9 @@ async def list_ai_models(
 ):
     """获取AI模型配置列表"""
     try:
-        models = db.query(AIModelConfig).order_by(
+        models = db.query(AIModelConfig).filter(
+            AIModelConfig.is_deleted == False
+        ).order_by(
             AIModelConfig.is_default.desc(),
             AIModelConfig.created_at.desc()
         ).all()
@@ -102,7 +104,10 @@ async def get_ai_model(
 ):
     """获取AI模型配置详情"""
     try:
-        model = db.query(AIModelConfig).filter(AIModelConfig.id == model_id).first()
+        model = db.query(AIModelConfig).filter(
+            AIModelConfig.id == model_id,
+            AIModelConfig.is_deleted == False
+        ).first()
         
         if not model:
             raise HTTPException(
@@ -226,7 +231,10 @@ async def update_ai_model(
 ):
     """更新AI模型配置"""
     try:
-        model = db.query(AIModelConfig).filter(AIModelConfig.id == model_id).first()
+        model = db.query(AIModelConfig).filter(
+            AIModelConfig.id == model_id,
+            AIModelConfig.is_deleted == False
+        ).first()
         
         if not model:
             raise HTTPException(
@@ -268,6 +276,8 @@ async def update_ai_model(
         if config_data.is_default is not None:
             if config_data.is_default:
                 db.query(AIModelConfig).filter(
+                    AIModelConfig.is_deleted == False
+                ).filter(
                     AIModelConfig.id != model_id,
                     AIModelConfig.is_default == True
                 ).update({"is_default": False})
@@ -302,12 +312,21 @@ async def delete_ai_model(
 ):
     """删除AI模型配置"""
     try:
-        model = db.query(AIModelConfig).filter(AIModelConfig.id == model_id).first()
+        model = db.query(AIModelConfig).filter(
+            AIModelConfig.id == model_id,
+            AIModelConfig.is_deleted == False
+        ).first()
         
         if not model:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="AI模型配置不存在"
+            )
+        
+        if model.is_deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="AI模型配置已被删除"
             )
         
         # 如果是默认模型，不允许删除
@@ -317,10 +336,11 @@ async def delete_ai_model(
                 detail="不能删除默认模型，请先设置其他模型为默认"
             )
         
-        db.delete(model)
+        # 软删除
+        model.is_deleted = True
         db.commit()
         
-        logger.info(f"用户 {current_user.username} 删除AI模型配置: {model.name}")
+        logger.info(f"用户 {current_user.username} 软删除AI模型配置: {model.name}")
         
         return ResponseModel(
             success=True,
@@ -345,7 +365,10 @@ async def set_default_model(
 ):
     """设置默认AI模型"""
     try:
-        model = db.query(AIModelConfig).filter(AIModelConfig.id == model_id).first()
+        model = db.query(AIModelConfig).filter(
+            AIModelConfig.id == model_id,
+            AIModelConfig.is_deleted == False
+        ).first()
         
         if not model:
             raise HTTPException(
@@ -360,7 +383,10 @@ async def set_default_model(
             )
         
         # 取消其他默认模型
-        db.query(AIModelConfig).filter(AIModelConfig.id != model_id).update({"is_default": False})
+        db.query(AIModelConfig).filter(
+            AIModelConfig.id != model_id,
+            AIModelConfig.is_deleted == False
+        ).update({"is_default": False})
         
         # 设置当前模型为默认
         model.is_default = True
@@ -393,7 +419,10 @@ async def test_model_connection(
     from app.core.llm.factory import LLMFactory
     
     try:
-        model = db.query(AIModelConfig).filter(AIModelConfig.id == model_id).first()
+        model = db.query(AIModelConfig).filter(
+            AIModelConfig.id == model_id,
+            AIModelConfig.is_deleted == False
+        ).first()
         
         if not model:
             raise HTTPException(

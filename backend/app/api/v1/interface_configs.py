@@ -137,7 +137,10 @@ async def list_configs(
 ):
     """获取接口配置列表（支持分页）"""
     try:
-        query = db.query(InterfaceConfig).filter(InterfaceConfig.user_id == current_user.id)
+        query = db.query(InterfaceConfig).filter(
+            InterfaceConfig.user_id == current_user.id,
+            InterfaceConfig.is_deleted == False
+        )
         
         if database_id:
             query = query.filter(InterfaceConfig.database_config_id == database_id)
@@ -157,7 +160,10 @@ async def list_configs(
         
         result = []
         for config in configs:
-            db_config = db.query(DatabaseConfig).filter(DatabaseConfig.id == config.database_config_id).first()
+            db_config = db.query(DatabaseConfig).filter(
+                DatabaseConfig.id == config.database_config_id,
+                DatabaseConfig.is_deleted == False
+            ).first()
             result.append({
                 "id": config.id,
                 "interface_name": config.interface_name,
@@ -199,7 +205,8 @@ async def get_config(
     try:
         config = db.query(InterfaceConfig).filter(
             InterfaceConfig.id == config_id,
-            InterfaceConfig.user_id == current_user.id
+            InterfaceConfig.user_id == current_user.id,
+            InterfaceConfig.is_deleted == False
         ).first()
         
         if not config:
@@ -276,7 +283,10 @@ async def get_config(
                     })
         
         # 获取保存的请求参数（从数据库）
-        saved_params = db.query(InterfaceParameter).filter(InterfaceParameter.interface_config_id == config_id).all()
+        saved_params = db.query(InterfaceParameter).filter(
+            InterfaceParameter.interface_config_id == config_id,
+            InterfaceParameter.is_deleted == False
+        ).all()
         saved_request_parameters = []
         for param in saved_params:
             saved_request_parameters.append({
@@ -319,7 +329,8 @@ async def get_config(
         # 获取保存的响应头（从数据库）
         saved_headers = db.query(InterfaceHeader).filter(
             InterfaceHeader.interface_config_id == config_id,
-            InterfaceHeader.name.like("Response-%")
+            InterfaceHeader.name.like("Response-%"),
+            InterfaceHeader.is_deleted == False
         ).all()
         response_headers_list = []
         for header in saved_headers:
@@ -486,7 +497,11 @@ async def create_config(
         # 处理请求参数（如果提供了）
         if "request_parameters" in config_data and isinstance(config_data["request_parameters"], list):
             # 先删除旧的参数
-            db.query(InterfaceParameter).filter(InterfaceParameter.interface_config_id == config.id).delete()
+            # 软删除旧的参数
+            db.query(InterfaceParameter).filter(
+                InterfaceParameter.interface_config_id == config.id,
+                InterfaceParameter.is_deleted == False
+            ).update({"is_deleted": True}, synchronize_session=False)
             # 创建新的参数
             for param_data in config_data["request_parameters"]:
                 if isinstance(param_data, dict) and param_data.get("name"):
@@ -507,10 +522,12 @@ async def create_config(
             # 这里我们使用InterfaceHeader表存储响应头，通过name字段区分
             try:
                 # 使用synchronize_session=False避免加载对象到会话
+                # 软删除旧的响应头
                 deleted_count = db.query(InterfaceHeader).filter(
                     InterfaceHeader.interface_config_id == config.id,
-                    InterfaceHeader.name.like("Response-%")  # 响应头使用Response-前缀
-                ).delete(synchronize_session=False)
+                    InterfaceHeader.name.like("Response-%"),  # 响应头使用Response-前缀
+                    InterfaceHeader.is_deleted == False
+                ).update({"is_deleted": True}, synchronize_session=False)
             except Exception as e:
                 # 如果删除失败（可能是表结构问题），记录日志但继续
                 logger.warning("删除旧响应头失败（可能不存在）: {}", e)
@@ -563,7 +580,8 @@ async def update_config(
     try:
         config = db.query(InterfaceConfig).filter(
             InterfaceConfig.id == config_id,
-            InterfaceConfig.user_id == current_user.id
+            InterfaceConfig.user_id == current_user.id,
+            InterfaceConfig.is_deleted == False
         ).first()
         
         if not config:
@@ -578,7 +596,11 @@ async def update_config(
         # 处理请求参数（如果提供了）
         if "request_parameters" in config_data and isinstance(config_data["request_parameters"], list):
             # 先删除旧的参数
-            db.query(InterfaceParameter).filter(InterfaceParameter.interface_config_id == config_id).delete()
+            # 软删除旧的参数
+            db.query(InterfaceParameter).filter(
+                InterfaceParameter.interface_config_id == config_id,
+                InterfaceParameter.is_deleted == False
+            ).update({"is_deleted": True}, synchronize_session=False)
             # 创建新的参数
             for param_data in config_data["request_parameters"]:
                 if isinstance(param_data, dict) and param_data.get("name"):
@@ -596,10 +618,12 @@ async def update_config(
         # 处理响应头（HTTP Response Headers）
         if "response_headers" in config_data and isinstance(config_data["response_headers"], list):
             # 先删除旧的响应头
+            # 软删除旧的响应头
             db.query(InterfaceHeader).filter(
                 InterfaceHeader.interface_config_id == config_id,
-                InterfaceHeader.name.like("Response-%")
-            ).delete()
+                InterfaceHeader.name.like("Response-%"),
+                InterfaceHeader.is_deleted == False
+            ).update({"is_deleted": True}, synchronize_session=False)
             # 创建新的响应头
             headers_added = 0
             for header_data in config_data["response_headers"]:
@@ -644,27 +668,37 @@ async def delete_config(
     try:
         config = db.query(InterfaceConfig).filter(
             InterfaceConfig.id == config_id,
-            InterfaceConfig.user_id == current_user.id
+            InterfaceConfig.user_id == current_user.id,
+            InterfaceConfig.is_deleted == False
         ).first()
         
         if not config:
             raise HTTPException(status_code=404, detail="接口配置不存在")
         
-        # 先删除关联的参数和请求头（级联删除应该自动处理，但为了确保安全，显式删除）
+        if config.is_deleted:
+            raise HTTPException(status_code=404, detail="接口配置已被删除")
+        
+        # 软删除关联的参数和请求头
         try:
             # 使用synchronize_session=False避免加载对象到会话
-            deleted_params = db.query(InterfaceParameter).filter(InterfaceParameter.interface_config_id == config_id).delete(synchronize_session=False)
-            deleted_headers = db.query(InterfaceHeader).filter(InterfaceHeader.interface_config_id == config_id).delete(synchronize_session=False)
-            logger.info(f"删除接口配置 {config_id} 的关联数据: {deleted_params} 个参数, {deleted_headers} 个请求头/响应头")
+            updated_params = db.query(InterfaceParameter).filter(
+                InterfaceParameter.interface_config_id == config_id,
+                InterfaceParameter.is_deleted == False
+            ).update({"is_deleted": True}, synchronize_session=False)
+            updated_headers = db.query(InterfaceHeader).filter(
+                InterfaceHeader.interface_config_id == config_id,
+                InterfaceHeader.is_deleted == False
+            ).update({"is_deleted": True}, synchronize_session=False)
+            logger.info(f"软删除接口配置 {config_id} 的关联数据: {updated_params} 个参数, {updated_headers} 个请求头/响应头")
             db.flush()  # 确保删除操作被提交到数据库
         except Exception as e:
-            logger.warning("删除关联数据时出现警告（可能不存在）: {}", e)
+            logger.warning("软删除关联数据时出现警告（可能不存在）: {}", e)
             # 即使删除关联数据失败，也继续删除主配置
         
-        # 删除接口配置
-        db.delete(config)
+        # 软删除接口配置
+        config.is_deleted = True
         db.commit()
-        logger.info(f"成功删除接口配置 {config_id}")
+        logger.info(f"成功软删除接口配置 {config_id}")
         
         return ResponseModel(
             success=True,
@@ -692,7 +726,8 @@ async def get_interface_samples(
     try:
         config = db.query(InterfaceConfig).filter(
             InterfaceConfig.id == config_id,
-            InterfaceConfig.user_id == current_user.id
+            InterfaceConfig.user_id == current_user.id,
+            InterfaceConfig.is_deleted == False
         ).first()
         
         if not config:
@@ -778,7 +813,8 @@ async def get_interface_api_doc(
     try:
         config = db.query(InterfaceConfig).filter(
             InterfaceConfig.id == config_id,
-            InterfaceConfig.user_id == current_user.id
+            InterfaceConfig.user_id == current_user.id,
+            InterfaceConfig.is_deleted == False
         ).first()
         
         if not config:

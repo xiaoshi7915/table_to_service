@@ -49,7 +49,8 @@ async def list_configs(
     """获取数据库配置列表（支持分页）"""
     try:
         query = db.query(DatabaseConfig).filter(
-            DatabaseConfig.user_id == current_user.id
+            DatabaseConfig.user_id == current_user.id,
+            DatabaseConfig.is_deleted == False
         ).order_by(DatabaseConfig.created_at.desc())
         
         # 获取总数
@@ -118,7 +119,8 @@ async def get_config(
     try:
         config = db.query(DatabaseConfig).filter(
             DatabaseConfig.id == config_id,
-            DatabaseConfig.user_id == current_user.id
+            DatabaseConfig.user_id == current_user.id,
+            DatabaseConfig.is_deleted == False
         ).first()
         
         if not config:
@@ -219,7 +221,8 @@ async def update_config(
     try:
         config = db.query(DatabaseConfig).filter(
             DatabaseConfig.id == config_id,
-            DatabaseConfig.user_id == current_user.id
+            DatabaseConfig.user_id == current_user.id,
+            DatabaseConfig.is_deleted == False
         ).first()
         
         if not config:
@@ -266,13 +269,18 @@ async def delete_config(
     try:
         config = db.query(DatabaseConfig).filter(
             DatabaseConfig.id == config_id,
-            DatabaseConfig.user_id == current_user.id
+            DatabaseConfig.user_id == current_user.id,
+            DatabaseConfig.is_deleted == False
         ).first()
         
         if not config:
             raise HTTPException(status_code=404, detail="数据库配置不存在")
         
-        db.delete(config)
+        if config.is_deleted:
+            raise HTTPException(status_code=404, detail="数据库配置已被删除")
+        
+        # 软删除
+        config.is_deleted = True
         db.commit()
         
         return ResponseModel(
@@ -413,7 +421,8 @@ async def test_connection(
     try:
         config = db.query(DatabaseConfig).filter(
             DatabaseConfig.id == config_id,
-            DatabaseConfig.user_id == current_user.id
+            DatabaseConfig.user_id == current_user.id,
+            DatabaseConfig.is_deleted == False
         ).first()
         
         if not config:
@@ -495,7 +504,8 @@ async def list_tables(
     try:
         config = db.query(DatabaseConfig).filter(
             DatabaseConfig.id == config_id,
-            DatabaseConfig.user_id == current_user.id
+            DatabaseConfig.user_id == current_user.id,
+            DatabaseConfig.is_deleted == False
         ).first()
         
         if not config:
@@ -724,7 +734,8 @@ async def get_table_sample(
     try:
         config = db.query(DatabaseConfig).filter(
             DatabaseConfig.id == config_id,
-            DatabaseConfig.user_id == current_user.id
+            DatabaseConfig.user_id == current_user.id,
+            DatabaseConfig.is_deleted == False
         ).first()
         
         if not config:
@@ -828,7 +839,8 @@ async def get_table_info(
     try:
         config = db.query(DatabaseConfig).filter(
             DatabaseConfig.id == config_id,
-            DatabaseConfig.user_id == current_user.id
+            DatabaseConfig.user_id == current_user.id,
+            DatabaseConfig.is_deleted == False
         ).first()
         
         if not config:

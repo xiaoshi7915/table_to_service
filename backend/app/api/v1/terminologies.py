@@ -59,7 +59,7 @@ async def list_terminologies(
 ):
     """获取术语列表（支持搜索和筛选）"""
     try:
-        query = db.query(Terminology)
+        query = db.query(Terminology).filter(Terminology.is_deleted == False)
         
         # 关键词搜索
         if keyword:
@@ -255,7 +255,10 @@ async def get_terminology(
 ):
     """获取术语详情"""
     try:
-        term = db.query(Terminology).filter(Terminology.id == term_id).first()
+        term = db.query(Terminology).filter(
+            Terminology.id == term_id,
+            Terminology.is_deleted == False
+        ).first()
         
         if not term:
             raise HTTPException(
@@ -297,11 +300,12 @@ async def create_terminology(
 ):
     """创建术语"""
     try:
-        # 检查是否已存在相同的术语映射
+        # 检查是否已存在相同的术语映射（排除已删除的）
         existing = db.query(Terminology).filter(
             Terminology.business_term == term_data.business_term,
             Terminology.db_field == term_data.db_field,
-            Terminology.table_name == term_data.table_name
+            Terminology.table_name == term_data.table_name,
+            Terminology.is_deleted == False
         ).first()
         
         if existing:
@@ -355,7 +359,10 @@ async def update_terminology(
 ):
     """更新术语"""
     try:
-        term = db.query(Terminology).filter(Terminology.id == term_id).first()
+        term = db.query(Terminology).filter(
+            Terminology.id == term_id,
+            Terminology.is_deleted == False
+        ).first()
         
         if not term:
             raise HTTPException(
@@ -405,7 +412,10 @@ async def delete_terminology(
 ):
     """删除术语"""
     try:
-        term = db.query(Terminology).filter(Terminology.id == term_id).first()
+        term = db.query(Terminology).filter(
+            Terminology.id == term_id,
+            Terminology.is_deleted == False
+        ).first()
         
         if not term:
             raise HTTPException(
@@ -413,10 +423,17 @@ async def delete_terminology(
                 detail="术语不存在"
             )
         
-        db.delete(term)
+        if term.is_deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="术语已被删除"
+            )
+        
+        # 软删除
+        term.is_deleted = True
         db.commit()
         
-        logger.info(f"用户 {current_user.username} 删除术语: {term.business_term}")
+        logger.info(f"用户 {current_user.username} 软删除术语: {term.business_term}")
         
         return ResponseModel(
             success=True,
@@ -523,6 +540,8 @@ async def batch_create_terminologies(
             try:
                 # 检查是否已存在
                 existing = db.query(Terminology).filter(
+                    Terminology.is_deleted == False
+                ).filter(
                     Terminology.business_term == term_data.business_term,
                     Terminology.db_field == term_data.db_field,
                     Terminology.table_name == term_data.table_name
@@ -579,6 +598,8 @@ async def list_categories(
     try:
         # 查询所有不重复的分类
         categories = db.query(Terminology.category).filter(
+            Terminology.is_deleted == False
+        ).filter(
             Terminology.category.isnot(None),
             Terminology.category != ""
         ).distinct().all()
@@ -596,5 +617,6 @@ async def list_categories(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取分类列表失败: {str(e)}"
         )
+
 
 

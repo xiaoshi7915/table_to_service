@@ -45,6 +45,7 @@ class DatabaseConfig(Base):
     # 额外连接参数（JSON格式，如SSL配置、连接池参数等）
     extra_params = Column(JSON, nullable=True, comment="额外连接参数（JSON格式）")
     is_active = Column(Boolean, default=True, comment="是否激活")
+    is_deleted = Column(Boolean, default=False, comment="是否已删除（软删除）")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
     
@@ -117,6 +118,7 @@ class InterfaceConfig(Base):
     enable_blacklist = Column(Boolean, default=False, comment="启用黑名单")
     blacklist_ips = Column(Text, comment="黑名单IP地址列表（换行分隔）")
     enable_audit_log = Column(Boolean, default=False, comment="启用审计日志")
+    is_deleted = Column(Boolean, default=False, comment="是否已删除（软删除）")
     
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
@@ -140,6 +142,7 @@ class InterfaceParameter(Base):
     constraint = Column(String(50), default="optional", comment="约束: required/optional")
     location = Column(String(50), default="query", comment="位置: query/body/header/path")
     default_value = Column(Text, comment="默认值")
+    is_deleted = Column(Boolean, default=False, comment="是否已删除（软删除）")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
     
     # 关系
@@ -157,6 +160,7 @@ class InterfaceHeader(Base):
     name = Column(String(100), nullable=False, default="", comment="请求头名称")
     value = Column(String(500), nullable=True, comment="请求头值")
     description = Column(Text, comment="描述")
+    is_deleted = Column(Boolean, default=False, comment="是否已删除（软删除）")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
     
     # 关系
@@ -180,6 +184,7 @@ class AIModelConfig(Base):
     scene = Column(String(100), nullable=True, comment="使用场景（general/multimodal/code/math/agent/long_context/low_cost/enterprise/education/medical/legal/finance/government/industry/social/roleplay）")
     is_default = Column(Boolean, default=False, comment="是否默认模型")
     is_active = Column(Boolean, default=True, comment="是否启用")
+    is_deleted = Column(Boolean, default=False, comment="是否已删除（软删除）")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
     
@@ -200,6 +205,7 @@ class Terminology(Base):
     description = Column(Text, nullable=True, comment="术语说明")
     category = Column(String(100), nullable=True, comment="分类")
     created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, comment="创建人ID")
+    is_deleted = Column(Boolean, default=False, comment="是否已删除（软删除）")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
     
@@ -225,6 +231,7 @@ class SQLExample(Base):
     description = Column(Text, nullable=True, comment="示例说明")
     chart_type = Column(String(50), nullable=True, comment="推荐图表类型")
     created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, comment="创建人ID")
+    is_deleted = Column(Boolean, default=False, comment="是否已删除（软删除）")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
     
@@ -243,6 +250,7 @@ class CustomPrompt(Base):
     priority = Column(Integer, default=0, comment="优先级（数字越大优先级越高）")
     is_active = Column(Boolean, default=True, comment="是否启用")
     created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, comment="创建人ID")
+    is_deleted = Column(Boolean, default=False, comment="是否已删除（软删除）")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
     
@@ -261,6 +269,7 @@ class BusinessKnowledge(Base):
     tags = Column(String(500), nullable=True, comment="标签（逗号分隔）")
     embedding = Column(Text, nullable=True, comment="向量嵌入（JSON格式，可选）")
     created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, comment="创建人ID")
+    is_deleted = Column(Boolean, default=False, comment="是否已删除（软删除）")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
     
@@ -278,6 +287,7 @@ class ChatSession(Base):
     data_source_id = Column(Integer, ForeignKey("database_configs.id", ondelete="SET NULL"), nullable=True, comment="关联的数据源ID")
     selected_tables = Column(Text, nullable=True, comment="选择的表列表（JSON格式）")
     status = Column(String(20), default="active", comment="状态（active, archived）")
+    is_deleted = Column(Boolean, default=False, comment="是否已删除（软删除）")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
     
@@ -318,6 +328,7 @@ class Dashboard(Base):
     description = Column(Text, nullable=True, comment="描述")
     layout_config = Column(Text, nullable=True, comment="布局配置（JSON格式）")
     is_public = Column(Boolean, default=False, comment="是否公开")
+    is_deleted = Column(Boolean, default=False, comment="是否已删除（软删除）")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
     
@@ -339,6 +350,7 @@ class DashboardWidget(Base):
     position_y = Column(Integer, default=0, comment="Y坐标")
     width = Column(Integer, default=400, comment="宽度")
     height = Column(Integer, default=300, comment="高度")
+    is_deleted = Column(Boolean, default=False, comment="是否已删除（软删除）")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
     
@@ -365,6 +377,7 @@ class ProbeTask(Base):
     end_time = Column(DateTime(timezone=True), nullable=True, comment="结束时间")
     last_probe_time = Column(DateTime(timezone=True), nullable=True, comment="上次探查时间")
     error_message = Column(Text, nullable=True, comment="错误信息")
+    is_deleted = Column(Boolean, default=False, comment="是否已删除（软删除）")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
     

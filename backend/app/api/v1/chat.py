@@ -353,7 +353,10 @@ async def list_sessions(
 ):
     """获取会话列表"""
     try:
-        query = db.query(ChatSession).filter(ChatSession.user_id == current_user.id)
+        query = db.query(ChatSession).filter(
+            ChatSession.user_id == current_user.id,
+            ChatSession.is_deleted == False
+        )
         
         # 状态筛选
         if status:
@@ -459,7 +462,8 @@ async def get_session(
     try:
         session = db.query(ChatSession).filter(
             ChatSession.id == session_id,
-            ChatSession.user_id == current_user.id
+            ChatSession.user_id == current_user.id,
+            ChatSession.is_deleted == False
         ).first()
         
         if not session:
@@ -583,7 +587,8 @@ async def update_session(
     try:
         session = db.query(ChatSession).filter(
             ChatSession.id == session_id,
-            ChatSession.user_id == current_user.id
+            ChatSession.user_id == current_user.id,
+            ChatSession.is_deleted == False
         ).first()
         
         if not session:
@@ -637,7 +642,8 @@ async def delete_session(
     try:
         session = db.query(ChatSession).filter(
             ChatSession.id == session_id,
-            ChatSession.user_id == current_user.id
+            ChatSession.user_id == current_user.id,
+            ChatSession.is_deleted == False
         ).first()
         
         if not session:
@@ -674,15 +680,17 @@ async def batch_delete_sessions(
         # 验证所有权
         sessions = db.query(ChatSession).filter(
             ChatSession.id.in_(session_ids),
-            ChatSession.user_id == current_user.id
+            ChatSession.user_id == current_user.id,
+            ChatSession.is_deleted == False
         ).all()
         
         if len(sessions) != len(session_ids):
             raise HTTPException(status_code=403, detail="部分会话不存在或无权限")
         
-        # 批量删除
+        # 批量软删除
         for session in sessions:
-            db.delete(session)
+            if not session.is_deleted:
+                session.is_deleted = True
         
         db.commit()
         
@@ -1714,7 +1722,8 @@ async def get_messages(
         # 验证会话
         session = db.query(ChatSession).filter(
             ChatSession.id == session_id,
-            ChatSession.user_id == current_user.id
+            ChatSession.user_id == current_user.id,
+            ChatSession.is_deleted == False
         ).first()
         
         if not session:

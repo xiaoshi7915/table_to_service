@@ -49,7 +49,7 @@ async def search_knowledge(
 ):
     """搜索知识库"""
     try:
-        query = db.query(BusinessKnowledge)
+        query = db.query(BusinessKnowledge).filter(BusinessKnowledge.is_deleted == False)
         
         # 关键词搜索（标题或内容）
         if keyword:
@@ -120,7 +120,10 @@ async def get_knowledge(
 ):
     """获取知识条目详情"""
     try:
-        knowledge = db.query(BusinessKnowledge).filter(BusinessKnowledge.id == knowledge_id).first()
+        knowledge = db.query(BusinessKnowledge).filter(
+            BusinessKnowledge.id == knowledge_id,
+            BusinessKnowledge.is_deleted == False
+        ).first()
         
         if not knowledge:
             raise HTTPException(
@@ -207,7 +210,10 @@ async def update_knowledge(
 ):
     """更新知识条目"""
     try:
-        knowledge = db.query(BusinessKnowledge).filter(BusinessKnowledge.id == knowledge_id).first()
+        knowledge = db.query(BusinessKnowledge).filter(
+            BusinessKnowledge.id == knowledge_id,
+            BusinessKnowledge.is_deleted == False
+        ).first()
         
         if not knowledge:
             raise HTTPException(
@@ -255,7 +261,10 @@ async def delete_knowledge(
 ):
     """删除知识条目"""
     try:
-        knowledge = db.query(BusinessKnowledge).filter(BusinessKnowledge.id == knowledge_id).first()
+        knowledge = db.query(BusinessKnowledge).filter(
+            BusinessKnowledge.id == knowledge_id,
+            BusinessKnowledge.is_deleted == False
+        ).first()
         
         if not knowledge:
             raise HTTPException(
@@ -263,10 +272,17 @@ async def delete_knowledge(
                 detail="知识条目不存在"
             )
         
-        db.delete(knowledge)
+        if knowledge.is_deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="知识条目已被删除"
+            )
+        
+        # 软删除
+        knowledge.is_deleted = True
         db.commit()
         
-        logger.info(f"用户 {current_user.username} 删除知识条目: {knowledge.title}")
+        logger.info(f"用户 {current_user.username} 软删除知识条目: {knowledge.title}")
         
         return ResponseModel(
             success=True,
@@ -292,6 +308,8 @@ async def list_categories(
     try:
         # 查询所有不重复的分类
         categories = db.query(BusinessKnowledge.category).filter(
+            BusinessKnowledge.is_deleted == False
+        ).filter(
             BusinessKnowledge.category.isnot(None),
             BusinessKnowledge.category != ""
         ).distinct().all()
@@ -320,6 +338,8 @@ async def list_tags(
     try:
         # 查询所有有标签的记录
         knowledge_list = db.query(BusinessKnowledge.tags).filter(
+            BusinessKnowledge.is_deleted == False
+        ).filter(
             BusinessKnowledge.tags.isnot(None),
             BusinessKnowledge.tags != ""
         ).all()

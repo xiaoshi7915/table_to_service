@@ -985,25 +985,109 @@ const loadTableFields = async (tableName) => {
 }
 
 const copyTableNameToClipboard = async () => {
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/90955628-c353-4677-b245-6e02e705c0bf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InterfaceConfig.vue:987',message:'copyTableNameToClipboard called',data:{hasTableName:!!selectedTableForReference.value,tableName:selectedTableForReference.value},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+  // #endregion
   if (selectedTableForReference.value) {
+    const textToCopy = selectedTableForReference.value
     try {
-      await navigator.clipboard.writeText(selectedTableForReference.value)
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/90955628-c353-4677-b245-6e02e705c0bf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InterfaceConfig.vue:991',message:'Attempting clipboard API',data:{textToCopy,hasClipboard:!!navigator.clipboard},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      await navigator.clipboard.writeText(textToCopy)
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/90955628-c353-4677-b245-6e02e705c0bf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InterfaceConfig.vue:993',message:'Clipboard API success',data:{textToCopy},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       ElMessage.success('表名已复制到剪贴板')
     } catch (error) {
-      ElMessage.error('复制失败')
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/90955628-c353-4677-b245-6e02e705c0bf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InterfaceConfig.vue:996',message:'Clipboard API failed, using fallback',data:{error:error.message,errorName:error.name,textToCopy},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      // 降级方案：使用 document.execCommand
+      const textarea = document.createElement('textarea')
+      textarea.value = textToCopy
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      try {
+        const success = document.execCommand('copy')
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/90955628-c353-4677-b245-6e02e705c0bf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InterfaceConfig.vue:1006',message:'Fallback execCommand result',data:{success,textToCopy},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
+        if (success) {
+          ElMessage.success('表名已复制到剪贴板')
+        } else {
+          ElMessage.error('复制失败，请手动复制')
+        }
+      } catch (e) {
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/90955628-c353-4677-b245-6e02e705c0bf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InterfaceConfig.vue:1012',message:'Fallback execCommand failed',data:{error:e.message,textToCopy},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
+        ElMessage.error('复制失败，请手动复制')
+      }
+      document.body.removeChild(textarea)
     }
+  } else {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/90955628-c353-4677-b245-6e02e705c0bf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InterfaceConfig.vue:1017',message:'No table name selected',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
+    ElMessage.warning('请先选择表名')
   }
 }
 
 const copyAllFieldsToClipboard = async () => {
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/90955628-c353-4677-b245-6e02e705c0bf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InterfaceConfig.vue:1020',message:'copyAllFieldsToClipboard called',data:{fieldsCount:tableFields.value.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+  // #endregion
   if (tableFields.value.length > 0) {
     const fields = tableFields.value.map(f => f.name).join(', ')
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/90955628-c353-4677-b245-6e02e705c0bf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InterfaceConfig.vue:1023',message:'Fields prepared',data:{fieldsCount:tableFields.value.length,fieldsLength:fields.length,fieldsPreview:fields.substring(0,50)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
     try {
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/90955628-c353-4677-b245-6e02e705c0bf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InterfaceConfig.vue:1026',message:'Attempting clipboard API',data:{hasClipboard:!!navigator.clipboard,fieldsLength:fields.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
       await navigator.clipboard.writeText(fields)
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/90955628-c353-4677-b245-6e02e705c0bf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InterfaceConfig.vue:1028',message:'Clipboard API success',data:{fieldsLength:fields.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
       ElMessage.success('所有字段名已复制到剪贴板')
     } catch (error) {
-      ElMessage.error('复制失败')
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/90955628-c353-4677-b245-6e02e705c0bf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InterfaceConfig.vue:1031',message:'Clipboard API failed, using fallback',data:{error:error.message,errorName:error.name,fieldsLength:fields.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
+      // 降级方案：使用 document.execCommand
+      const textarea = document.createElement('textarea')
+      textarea.value = fields
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      try {
+        const success = document.execCommand('copy')
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/90955628-c353-4677-b245-6e02e705c0bf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InterfaceConfig.vue:1040',message:'Fallback execCommand result',data:{success,fieldsLength:fields.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
+        if (success) {
+          ElMessage.success('所有字段名已复制到剪贴板')
+        } else {
+          ElMessage.error('复制失败，请手动复制')
+        }
+      } catch (e) {
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/90955628-c353-4677-b245-6e02e705c0bf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InterfaceConfig.vue:1047',message:'Fallback execCommand failed',data:{error:e.message,fieldsLength:fields.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
+        ElMessage.error('复制失败，请手动复制')
+      }
+      document.body.removeChild(textarea)
     }
+  } else {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/90955628-c353-4677-b245-6e02e705c0bf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InterfaceConfig.vue:1054',message:'No fields available',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
+    ElMessage.warning('没有可复制的字段')
   }
 }
 

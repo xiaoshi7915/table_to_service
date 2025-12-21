@@ -64,7 +64,7 @@ async def list_sql_examples(
 ):
     """获取SQL示例列表"""
     try:
-        query = db.query(SQLExample)
+        query = db.query(SQLExample).filter(SQLExample.is_deleted == False)
         
         # 数据库类型筛选
         if db_type:
@@ -260,7 +260,10 @@ async def get_sql_example(
 ):
     """获取SQL示例详情"""
     try:
-        example = db.query(SQLExample).filter(SQLExample.id == example_id).first()
+        example = db.query(SQLExample).filter(
+            SQLExample.id == example_id,
+            SQLExample.is_deleted == False
+        ).first()
         
         if not example:
             raise HTTPException(
@@ -358,7 +361,10 @@ async def update_sql_example(
 ):
     """更新SQL示例"""
     try:
-        example = db.query(SQLExample).filter(SQLExample.id == example_id).first()
+        example = db.query(SQLExample).filter(
+            SQLExample.id == example_id,
+            SQLExample.is_deleted == False
+        ).first()
         
         if not example:
             raise HTTPException(
@@ -412,7 +418,10 @@ async def delete_sql_example(
 ):
     """删除SQL示例"""
     try:
-        example = db.query(SQLExample).filter(SQLExample.id == example_id).first()
+        example = db.query(SQLExample).filter(
+            SQLExample.id == example_id,
+            SQLExample.is_deleted == False
+        ).first()
         
         if not example:
             raise HTTPException(
@@ -420,10 +429,17 @@ async def delete_sql_example(
                 detail="SQL示例不存在"
             )
         
-        db.delete(example)
+        if example.is_deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="SQL示例已被删除"
+            )
+        
+        # 软删除
+        example.is_deleted = True
         db.commit()
         
-        logger.info(f"用户 {current_user.username} 删除SQL示例: {example.title}")
+        logger.info(f"用户 {current_user.username} 软删除SQL示例: {example.title}")
         
         return ResponseModel(
             success=True,

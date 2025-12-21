@@ -60,7 +60,7 @@ async def list_prompts(
 ):
     """获取提示词列表"""
     try:
-        query = db.query(CustomPrompt)
+        query = db.query(CustomPrompt).filter(CustomPrompt.is_deleted == False)
         
         # 类型筛选
         if prompt_type:
@@ -256,7 +256,10 @@ async def get_prompt(
 ):
     """获取提示词详情"""
     try:
-        prompt = db.query(CustomPrompt).filter(CustomPrompt.id == prompt_id).first()
+        prompt = db.query(CustomPrompt).filter(
+            CustomPrompt.id == prompt_id,
+            CustomPrompt.is_deleted == False
+        ).first()
         
         if not prompt:
             raise HTTPException(
@@ -340,7 +343,10 @@ async def update_prompt(
 ):
     """更新提示词"""
     try:
-        prompt = db.query(CustomPrompt).filter(CustomPrompt.id == prompt_id).first()
+        prompt = db.query(CustomPrompt).filter(
+            CustomPrompt.id == prompt_id,
+            CustomPrompt.is_deleted == False
+        ).first()
         
         if not prompt:
             raise HTTPException(
@@ -390,7 +396,10 @@ async def delete_prompt(
 ):
     """删除提示词"""
     try:
-        prompt = db.query(CustomPrompt).filter(CustomPrompt.id == prompt_id).first()
+        prompt = db.query(CustomPrompt).filter(
+            CustomPrompt.id == prompt_id,
+            CustomPrompt.is_deleted == False
+        ).first()
         
         if not prompt:
             raise HTTPException(
@@ -398,10 +407,17 @@ async def delete_prompt(
                 detail="提示词不存在"
             )
         
-        db.delete(prompt)
+        if prompt.is_deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="提示词已被删除"
+            )
+        
+        # 软删除
+        prompt.is_deleted = True
         db.commit()
         
-        logger.info(f"用户 {current_user.username} 删除提示词: {prompt.name}")
+        logger.info(f"用户 {current_user.username} 软删除提示词: {prompt.name}")
         
         return ResponseModel(
             success=True,
@@ -426,7 +442,9 @@ async def list_prompt_types(
     """获取所有提示词类型列表"""
     try:
         # 查询所有不重复的类型
-        types = db.query(CustomPrompt.prompt_type).distinct().all()
+        types = db.query(CustomPrompt.prompt_type).filter(
+            CustomPrompt.is_deleted == False
+        ).distinct().all()
         
         type_list = [t[0] for t in types if t[0]]
         
