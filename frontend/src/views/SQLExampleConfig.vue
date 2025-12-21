@@ -89,6 +89,16 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
+        <el-table-column prop="created_at" label="创建时间" width="180" sortable>
+          <template #default="{ row }">
+            {{ formatDateTime(row.created_at) }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="updated_at" label="更新时间" width="180" sortable>
+          <template #default="{ row }">
+            {{ formatDateTime(row.updated_at) }}
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
             <div class="action-buttons">
@@ -531,6 +541,24 @@ const handleDownloadTemplate = async () => {
   } catch (error) {
     console.error('下载模板失败:', error)
     ElMessage.error('下载模板失败')
+  }
+}
+
+// 格式化日期时间
+const formatDateTime = (dateTimeStr) => {
+  if (!dateTimeStr) return '-'
+  try {
+    const date = new Date(dateTimeStr)
+    return date.toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    })
+  } catch (error) {
+    return dateTimeStr
   }
 }
 

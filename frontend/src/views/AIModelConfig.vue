@@ -63,6 +63,16 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
+        <el-table-column prop="created_at" label="创建时间" width="180" sortable>
+          <template #default="{ row }">
+            {{ formatDateTime(row.created_at) }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="updated_at" label="更新时间" width="180" sortable>
+          <template #default="{ row }">
+            {{ formatDateTime(row.updated_at) }}
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="380" fixed="right">
           <template #default="{ row }">
             <div class="action-buttons">
@@ -497,16 +507,13 @@ const loadModels = async () => {
   loading.value = true
   try {
     const res = await aiModelAPI.getAIModels()
-    console.log('API响应:', res)
     // 兼容不同的响应格式
     if (res && res.success !== undefined) {
       // 新格式：res.success
       if (res.success) {
         models.value = res.data || []
         pagination.total = models.value.length
-        console.log('加载的模型列表:', models.value)
       } else {
-        console.error('获取模型列表失败:', res.message)
         ElMessage.error(res.message || '获取模型列表失败')
       }
     } else if (res && res.data) {
@@ -514,17 +521,13 @@ const loadModels = async () => {
       if (res.data.success) {
         models.value = res.data.data || []
         pagination.total = models.value.length
-        console.log('加载的模型列表:', models.value)
       } else {
-        console.error('获取模型列表失败:', res.data.message)
         ElMessage.error(res.data.message || '获取模型列表失败')
       }
     } else {
-      console.error('API响应格式错误:', res)
       ElMessage.error('API响应格式错误')
     }
   } catch (error) {
-    console.error('加载模型列表失败:', error)
     const errorMsg = error.response?.data?.message || error.message || '加载模型列表失败'
     ElMessage.error(errorMsg)
   } finally {
@@ -545,45 +548,32 @@ const handleCurrentChange = () => {
 const loadProviders = async () => {
   try {
     const res = await aiModelAPI.getProviders()
-    console.log('API响应完整对象:', res)
-    console.log('API响应data:', res?.data)
     
     // 根据 request.js 的响应拦截器，成功响应会被转换为 { code, success, message, data }
     // 所以 res 本身就是转换后的对象，而不是 res.data
     if (res && res.success !== undefined) {
       if (res.success) {
         providers.value = res.data || []
-        console.log('加载的供应商列表:', providers.value)
-        if (providers.value.length === 0) {
-          console.warn('供应商列表为空')
-        }
       } else {
         const errorMsg = res.message || res.detail || '未知错误'
-        console.error('获取供应商列表失败:', errorMsg)
         ElMessage.error(`获取供应商列表失败: ${errorMsg}`)
       }
     } else if (res && res.data) {
       // 兼容旧格式：res.data
       if (res.data.success) {
         providers.value = res.data.data || []
-        console.log('加载的供应商列表:', providers.value)
       } else {
         const errorMsg = res.data.message || res.data.detail || '未知错误'
-        console.error('获取供应商列表失败:', errorMsg)
         ElMessage.error(`获取供应商列表失败: ${errorMsg}`)
       }
     } else {
-      console.error('API响应格式错误:', res)
       ElMessage.error('API响应格式错误，请检查网络连接')
     }
   } catch (error) {
-    console.error('加载提供商列表失败 - 完整错误:', error)
-    console.error('错误响应:', error.response)
     const errorMsg = error.response?.data?.message || 
                     error.response?.data?.detail || 
                     error.message || 
                     '未知错误'
-    console.error('错误信息:', errorMsg)
     ElMessage.error(`加载供应商列表失败: ${errorMsg}`)
   }
 }
@@ -749,23 +739,14 @@ const getProviderLogo = (provider) => {
   // 文件路径：/images/logos/{provider}.png
   // 例如：/images/logos/deepseek.png, /images/logos/qwen.png
   if (!provider || typeof provider !== 'string') return ''
-  try {
-    return `/images/logos/${provider}.png`
-  } catch (error) {
-    console.warn('获取Logo路径失败:', error)
-    return ''
-  }
+  return `/images/logos/${provider}.png`
 }
 
 // Logo加载错误处理
 const handleLogoError = (event) => {
   // Logo加载失败时隐藏图片，显示默认图标
-  try {
-    if (event && event.target) {
-      event.target.style.display = 'none'
-    }
-  } catch (error) {
-    console.warn('处理Logo错误失败:', error)
+  if (event && event.target) {
+    event.target.style.display = 'none'
   }
 }
 
@@ -794,7 +775,6 @@ const handleTestConnection = async (row) => {
   
   try {
     const res = await aiModelAPI.testModelConnection(row.id)
-    console.log('测试连接响应:', res)
     
     // 兼容不同的响应格式
     let responseData = null
@@ -842,7 +822,6 @@ const handleTestConnection = async (row) => {
       })
     }
   } catch (error) {
-    console.error('测试连接失败:', error)
     const errorMsg = error.response?.data?.message || 
                     error.response?.data?.detail || 
                     error.message || 
@@ -874,7 +853,8 @@ const handleDelete = async (row) => {
     loadModels()
   } catch (error) {
     if (error !== 'cancel') {
-      console.error('删除失败:', error)
+      const errorMsg = error.response?.data?.message || error.message || '删除失败'
+      ElMessage.error(errorMsg)
     }
   }
 }
@@ -886,7 +866,8 @@ const handleSetDefault = async (row) => {
     ElMessage.success('设置成功')
     loadModels()
   } catch (error) {
-    console.error('设置默认失败:', error)
+    const errorMsg = error.response?.data?.message || error.message || '设置默认失败'
+    ElMessage.error(errorMsg)
   }
 }
 
@@ -927,7 +908,8 @@ const handleSubmit = async () => {
     loadModels()
   } catch (error) {
     if (error !== false) {
-      console.error('提交失败:', error)
+      const errorMsg = error.response?.data?.message || error.message || '提交失败'
+      ElMessage.error(errorMsg)
     }
   } finally {
     submitting.value = false
@@ -958,6 +940,24 @@ const resetForm = () => {
     scene: [],
     is_default: false
   })
+}
+
+// 格式化日期时间
+const formatDateTime = (dateTimeStr) => {
+  if (!dateTimeStr) return '-'
+  try {
+    const date = new Date(dateTimeStr)
+    return date.toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    })
+  } catch (error) {
+    return dateTimeStr
+  }
 }
 
 onMounted(() => {
