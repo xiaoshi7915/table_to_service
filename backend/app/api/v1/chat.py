@@ -5,11 +5,12 @@
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
-from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy import desc, func
 from loguru import logger
 from datetime import datetime
 import json
+import asyncio
 
 from app.core.database import get_local_db
 from app.core.security import get_current_active_user
@@ -18,6 +19,7 @@ from app.schemas import ResponseModel
 from app.core.llm.factory import LLMFactory
 from app.api.v1.chat_recommendations import generate_dynamic_recommendations
 from app.core.rag_langchain.question_rewriter import QuestionRewriter
+from app.core.performance_monitor import get_performance_monitor, track_time
 
 router = APIRouter(prefix="/api/v1/chat", tags=["对话"])
 
@@ -386,22 +388,34 @@ async def list_sessions(
             (page - 1) * page_size
         ).limit(page_size).all()
         
+        # 优化：批量获取数据源名称和消息数量（避免N+1查询）
+        session_ids = [s.id for s in sessions]
+        data_source_ids = [s.data_source_id for s in sessions if s.data_source_id]
+        
+        # 批量查询数据源名称
+        db_configs_map = {}
+        if data_source_ids:
+            db_configs = db.query(DatabaseConfig).filter(
+                DatabaseConfig.id.in_(data_source_ids)
+            ).all()
+            db_configs_map = {cfg.id: cfg.name for cfg in db_configs}
+        
+        # 批量查询消息数量（使用聚合查询）
+        message_counts_map = {}
+        if session_ids:
+            message_counts = db.query(
+                ChatMessage.session_id,
+                func.count(ChatMessage.id).label('count')
+            ).filter(
+                ChatMessage.session_id.in_(session_ids)
+            ).group_by(ChatMessage.session_id).all()
+            message_counts_map = {session_id: count for session_id, count in message_counts}
+        
         # 构建响应数据
         session_list = []
         for session in sessions:
-            # 获取数据源名称
-            data_source_name = None
-            if session.data_source_id:
-                db_config = db.query(DatabaseConfig).filter(
-                    DatabaseConfig.id == session.data_source_id
-                ).first()
-                if db_config:
-                    data_source_name = db_config.name
-            
-            # 获取消息数量
-            message_count = db.query(ChatMessage).filter(
-                ChatMessage.session_id == session.id
-            ).count()
+            data_source_name = db_configs_map.get(session.data_source_id) if session.data_source_id else None
+            message_count = message_counts_map.get(session.id, 0)
             
             session_list.append({
                 "id": session.id,
@@ -689,235 +703,267 @@ async def send_message(
     db: Session = Depends(get_local_db)
 ):
     """发送消息并生成SQL"""
-    try:
-        # 1. 验证会话
-        session = db.query(ChatSession).filter(
-            ChatSession.id == session_id,
-            ChatSession.user_id == current_user.id
-        ).first()
-        
-        if not session:
-            raise HTTPException(status_code=404, detail="会话不存在")
-        
-        # 2. 确定数据源
-        data_source_id = request.data_source_id or session.data_source_id
-        if not data_source_id:
-            raise HTTPException(status_code=400, detail="请指定数据源")
-        
-        db_config = db.query(DatabaseConfig).filter(
-            DatabaseConfig.id == data_source_id,
-            DatabaseConfig.user_id == current_user.id
-        ).first()
-        
-        if not db_config:
-            raise HTTPException(status_code=404, detail="数据源不存在")
-        
-        # 3. 获取选择的表列表（优先使用请求中的，否则从会话中获取）
-        selected_tables = request.selected_tables
-        if not selected_tables and session.selected_tables:
-            try:
-                selected_tables = json.loads(session.selected_tables)
-            except:
-                selected_tables = None
-        
-        # 4. 问题改写（优化用户问题表述）
-        rewritten_question = request.question
-        question_rewrite_info = None
+    with track_time("智能问数完整流程"):
         try:
-            # 创建问题改写服务（使用规则引擎，因为LLM需要异步调用）
-            rewriter = QuestionRewriter(llm_client=None)
+            # 1. 验证会话
+            session = db.query(ChatSession).filter(
+                ChatSession.id == session_id,
+                ChatSession.user_id == current_user.id
+            ).first()
             
-            # 构建上下文信息
-            rewrite_context = {
-                "db_type": db_config.db_type or "mysql",
-                "table_names": selected_tables or []
-            }
+            if not session:
+                raise HTTPException(status_code=404, detail="会话不存在")
             
-            # 获取术语映射（如果有）
-            if selected_tables:
-                terminologies = db.query(Terminology).filter(
-                    Terminology.table_name.in_(selected_tables)
-                ).all()
-                if terminologies:
-                    terminology_map = {
-                        t.business_term: t.db_field
-                        for t in terminologies
-                        if t.business_term and t.db_field
-                    }
-                    rewrite_context["terminology_map"] = terminology_map
+            # 2. 确定数据源
+            data_source_id = request.data_source_id or session.data_source_id
+            if not data_source_id:
+                raise HTTPException(status_code=400, detail="请指定数据源")
             
-            # 改写问题
-            rewrite_result = rewriter.rewrite_question(
-                question=request.question,
-                context=rewrite_context
-            )
+            db_config = db.query(DatabaseConfig).filter(
+                DatabaseConfig.id == data_source_id,
+                DatabaseConfig.user_id == current_user.id
+            ).first()
             
-            # 检查是否有权限警告
-            warnings = rewrite_result.get("warnings", [])
-            if warnings:
-                # 如果有警告，返回错误提示
-                return ResponseModel(
-                    success=False,
-                    message="问题包含不允许的操作",
-                    data={
-                        "error": warnings[0],
-                        "warnings": warnings,
-                        "can_retry": True,
-                        "suggestion": "请修改您的问题，使用统计查询或添加筛选条件，避免查询所有数据明细或修改数据操作。"
-                    }
-                )
+            if not db_config:
+                raise HTTPException(status_code=404, detail="数据源不存在")
             
-            # 如果问题被改写，使用改写后的问题
-            if rewrite_result.get("rewritten_question") and rewrite_result["rewritten_question"] != request.question:
-                rewritten_question = rewrite_result["rewritten_question"]
-                question_rewrite_info = {
-                    "original": rewrite_result["original_question"],
-                    "rewritten": rewrite_result["rewritten_question"],
-                    "changes": rewrite_result.get("changes", []),
-                    "method": rewrite_result.get("method", "rule")
-                }
-                logger.info(f"问题改写: {request.question} -> {rewritten_question}")
-        except Exception as e:
-            logger.warning(f"问题改写失败: {e}，使用原始问题")
-            # 改写失败不影响主流程，继续使用原始问题
-        
-        # 5. 保存用户消息（保存原始问题，但使用改写后的问题进行SQL生成）
-        user_message = ChatMessage(
-            session_id=session_id,
-            role="user",
-            content=request.question  # 保存原始问题
-        )
-        db.add(user_message)
-        db.commit()
-        
-        # 6. 获取AI模型配置
-        model_config = db.query(AIModelConfig).filter(
-            AIModelConfig.is_default == True,
-            AIModelConfig.is_active == True
-        ).first()
-        
-        if not model_config:
-            raise HTTPException(status_code=400, detail="未配置默认AI模型")
-        
-        # 7. 创建LLM客户端
-        llm_client = LLMFactory.create_client(model_config)
-        
-        # 8. 创建LangChain适配的LLM
-        from app.core.rag_langchain.llm_adapter import LangChainLLMAdapter
-        langchain_llm = LangChainLLMAdapter(llm_client)
-        
-        # 9. 创建RAG服务（使用LangChain版本）
-        from app.core.rag_langchain.embedding_service import ChineseEmbeddingService
-        from app.core.rag_langchain.vector_store import VectorStoreManager
-        from app.core.rag_langchain.hybrid_retriever import HybridRetriever
-        from app.core.rag_langchain.rag_workflow import RAGWorkflow
-        from app.core.config import settings
-        try:
-            from langchain_core.documents import Document
-            try:
-                from langchain_core.retrievers import BaseRetriever
-            except ImportError:
-                from langchain.schema import BaseRetriever
-        except ImportError:
-            from langchain.schema import Document, BaseRetriever
-        
-        # 初始化嵌入服务
-        embedding_service = None
-        try:
-            embedding_service = ChineseEmbeddingService()
-            logger.info("使用中文嵌入模型（bge-base-zh-v1.5）")
-        except Exception as e:
-            logger.warning(f"中文嵌入模型加载失败: {e}，将使用传统检索")
-        
-        # 初始化向量存储管理器
-        vector_manager = None
-        if embedding_service:
-            try:
-                # 使用本地数据库连接字符串（需要是PostgreSQL）
-                connection_string = settings.local_database_url
-                if "postgresql" in connection_string.lower():
-                    vector_manager = VectorStoreManager(connection_string, embedding_service)
-                    logger.info("向量存储管理器初始化成功")
-                else:
-                    logger.warning("向量存储需要PostgreSQL数据库，当前配置不是PostgreSQL")
-            except Exception as e:
-                logger.warning(f"向量存储管理器初始化失败: {e}")
-        
-        # 创建检索器
-        terminology_retriever = None
-        sql_example_retriever = None
-        knowledge_retriever = None
-        
-        if vector_manager:
-            try:
-                # 并行加载文档用于BM25检索（优化性能）
-                import asyncio
+            # 3. 获取选择的表列表（优先使用请求中的，否则从会话中获取）
+            selected_tables = request.selected_tables
+            if not selected_tables and session.selected_tables:
                 try:
-                    # 尝试并行查询（如果数据库支持）
-                    terminologies, sql_examples, knowledge_items = await asyncio.gather(
-                        asyncio.to_thread(db.query(Terminology).all),
-                        asyncio.to_thread(db.query(SQLExample).all),
-                        asyncio.to_thread(db.query(BusinessKnowledge).all)
-                    )
-                except Exception:
-                    # 降级到串行查询
-                    terminologies = db.query(Terminology).all()
-                    sql_examples = db.query(SQLExample).all()
-                    knowledge_items = db.query(BusinessKnowledge).all()
-                
-                # 转换为LangChain Document
-                term_docs = [
-                    Document(
-                        page_content=f"{t.business_term} {t.description or ''} {t.db_field}",
-                        metadata={"id": t.id, "type": "terminology"}
-                    )
-                    for t in terminologies
-                ]
-                
-                sql_docs = [
-                    Document(
-                        page_content=f"{e.question} {e.description or ''} {e.sql_statement}",
-                        metadata={"id": e.id, "type": "sql_example", "db_type": e.db_type}
-                    )
-                    for e in sql_examples
-                ]
-                
-                knowledge_docs = [
-                    Document(
-                        page_content=f"{k.title} {k.content}",
-                        metadata={"id": k.id, "type": "knowledge", "category": k.category}
-                    )
-                    for k in knowledge_items
-                ]
-                
-                # 创建混合检索器
-                if term_docs:
-                    terminology_retriever = HybridRetriever(
-                        vector_store=vector_manager.get_store("terminologies"),
-                        documents=term_docs
-                    )
-                
-                if sql_docs:
-                    sql_example_retriever = HybridRetriever(
-                        vector_store=vector_manager.get_store("sql_examples"),
-                        documents=sql_docs
-                    )
-                
-                if knowledge_docs:
-                    knowledge_retriever = HybridRetriever(
-                        vector_store=vector_manager.get_store("knowledge"),
-                        documents=knowledge_docs
-                    )
-                
-            except Exception as e:
-                logger.warning(f"创建检索器失败: {e}，将使用简化版本")
-        
-        # 如果检索器创建失败，使用空检索器（降级方案）
-        if not terminology_retriever:
+                    selected_tables = json.loads(session.selected_tables)
+                except:
+                    selected_tables = None
+            
+            # 4. 问题改写（优化用户问题表述）
+            rewritten_question = request.question
+            question_rewrite_info = None
             try:
-                from langchain_core.retrievers import BaseRetriever
+                # 创建问题改写服务（使用规则引擎，因为LLM需要异步调用）
+                rewriter = QuestionRewriter(llm_client=None)
+                
+                # 构建上下文信息
+                rewrite_context = {
+                    "db_type": db_config.db_type or "mysql",
+                    "table_names": selected_tables or []
+                }
+                
+                # 获取术语映射（如果有）
+                if selected_tables:
+                    terminologies = db.query(Terminology).filter(
+                        Terminology.table_name.in_(selected_tables)
+                    ).all()
+                    if terminologies:
+                        terminology_map = {
+                            t.business_term: t.db_field
+                            for t in terminologies
+                            if t.business_term and t.db_field
+                        }
+                        rewrite_context["terminology_map"] = terminology_map
+                
+                # 改写问题
+                rewrite_result = rewriter.rewrite_question(
+                    question=request.question,
+                    context=rewrite_context
+                )
+                
+                # 检查是否有权限警告
+                warnings = rewrite_result.get("warnings", [])
+                if warnings:
+                    # 如果有警告，返回错误提示
+                    return ResponseModel(
+                        success=False,
+                        message="问题包含不允许的操作",
+                        data={
+                            "error": warnings[0],
+                            "warnings": warnings,
+                            "can_retry": True,
+                            "suggestion": "请修改您的问题，使用统计查询或添加筛选条件，避免查询所有数据明细或修改数据操作。"
+                        }
+                    )
+                
+                # 如果问题被改写，使用改写后的问题
+                if rewrite_result.get("rewritten_question") and rewrite_result["rewritten_question"] != request.question:
+                    rewritten_question = rewrite_result["rewritten_question"]
+                    question_rewrite_info = {
+                        "original": rewrite_result["original_question"],
+                        "rewritten": rewrite_result["rewritten_question"],
+                        "changes": rewrite_result.get("changes", []),
+                        "method": rewrite_result.get("method", "rule")
+                    }
+                    logger.info(f"问题改写: {request.question} -> {rewritten_question}")
+            except Exception as e:
+                logger.warning(f"问题改写失败: {e}，使用原始问题")
+                # 改写失败不影响主流程，继续使用原始问题
+        
+            # 5. 保存用户消息（保存原始问题，但使用改写后的问题进行SQL生成）
+            user_message = ChatMessage(
+                session_id=session_id,
+                role="user",
+                content=request.question  # 保存原始问题
+            )
+            db.add(user_message)
+            db.commit()
+            
+            # 6. 获取AI模型配置
+            model_config = db.query(AIModelConfig).filter(
+                AIModelConfig.is_default == True,
+                AIModelConfig.is_active == True
+            ).first()
+            
+            if not model_config:
+                raise HTTPException(status_code=400, detail="未配置默认AI模型")
+        
+            # 7. 创建LLM客户端
+            llm_client = LLMFactory.create_client(model_config)
+        
+            # 8. 创建LangChain适配的LLM
+            from app.core.rag_langchain.llm_adapter import LangChainLLMAdapter
+            langchain_llm = LangChainLLMAdapter(llm_client)
+        
+            # 9. 创建RAG服务（使用LangChain版本）
+            from app.core.rag_langchain.embedding_service import ChineseEmbeddingService
+            from app.core.rag_langchain.vector_store import VectorStoreManager
+            from app.core.rag_langchain.hybrid_retriever import HybridRetriever
+            from app.core.rag_langchain.rag_workflow import RAGWorkflow
+            from app.core.config import settings
+            try:
+                from langchain_core.documents import Document
+                try:
+                    from langchain_core.retrievers import BaseRetriever
+                except ImportError:
+                    from langchain.schema import BaseRetriever
             except ImportError:
-                from langchain.schema import BaseRetriever
+                from langchain.schema import Document, BaseRetriever
+        
+            # 初始化嵌入服务
+            embedding_service = None
+            try:
+                embedding_service = ChineseEmbeddingService()
+                logger.info("使用中文嵌入模型（bge-base-zh-v1.5）")
+            except Exception as e:
+                logger.warning(f"中文嵌入模型加载失败: {e}，将使用传统检索")
+        
+            # 初始化向量存储管理器
+            vector_manager = None
+            if embedding_service:
+                try:
+                    # 使用本地数据库连接字符串（需要是PostgreSQL）
+                    connection_string = settings.local_database_url
+                    if "postgresql" in connection_string.lower():
+                        vector_manager = VectorStoreManager(connection_string, embedding_service)
+                        logger.info("✅ 向量存储管理器初始化成功（使用pgvector）")
+                    else:
+                        # 非PostgreSQL数据库，向量存储功能不可用，但不影响基本功能
+                        db_type = "MySQL" if "mysql" in connection_string.lower() else "其他数据库"
+                        logger.info(f"ℹ️  向量存储功能需要PostgreSQL数据库（pgvector扩展），当前本地数据库为{db_type}。系统将使用简化检索模式，功能正常但检索精度可能略低")
+                        vector_manager = None
+                except Exception as e:
+                    logger.warning(f"向量存储管理器初始化失败: {e}，将使用简化检索模式")
+                    vector_manager = None
+        
+            # 创建检索器
+            terminology_retriever = None
+            sql_example_retriever = None
+            knowledge_retriever = None
+        
+            if vector_manager:
+                try:
+                    # 并行加载文档用于BM25检索（优化性能）
+                    import concurrent.futures
+                    
+                    # 优化：只查询相关的数据（如果指定了表名）
+                    def query_terminologies():
+                        query = db.query(Terminology)
+                        if selected_tables:
+                            query = query.filter(Terminology.table_name.in_(selected_tables))
+                        return query.all()
+                    
+                    def query_sql_examples():
+                        query = db.query(SQLExample)
+                        if selected_tables:
+                            query = query.filter(
+                                (SQLExample.table_name.in_(selected_tables)) |
+                                (SQLExample.table_name.is_(None))
+                            )
+                        # 只查询当前数据库类型的示例
+                        if db_config.db_type:
+                            query = query.filter(SQLExample.db_type == db_config.db_type)
+                        return query.all()
+                    
+                    def query_knowledge():
+                        return db.query(BusinessKnowledge).all()
+                    
+                    # 使用线程池并行执行查询
+                    try:
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                            term_future = executor.submit(query_terminologies)
+                            sql_future = executor.submit(query_sql_examples)
+                            knowledge_future = executor.submit(query_knowledge)
+                            
+                            terminologies = term_future.result()
+                            sql_examples = sql_future.result()
+                            knowledge_items = knowledge_future.result()
+                    except Exception as e:
+                        logger.warning(f"并行查询失败，降级到串行查询: {e}")
+                        # 降级到串行查询
+                        terminologies = query_terminologies()
+                        sql_examples = query_sql_examples()
+                        knowledge_items = query_knowledge()
+                    
+                    # 转换为LangChain Document
+                    term_docs = [
+                        Document(
+                            page_content=f"{t.business_term} {t.description or ''} {t.db_field}",
+                            metadata={"id": t.id, "type": "terminology"}
+                        )
+                        for t in terminologies
+                    ]
+                    
+                    sql_docs = [
+                        Document(
+                            page_content=f"{e.question} {e.description or ''} {e.sql_statement}",
+                            metadata={"id": e.id, "type": "sql_example", "db_type": e.db_type}
+                        )
+                        for e in sql_examples
+                    ]
+                    
+                    knowledge_docs = [
+                        Document(
+                            page_content=f"{k.title} {k.content}",
+                            metadata={"id": k.id, "type": "knowledge", "category": k.category}
+                        )
+                        for k in knowledge_items
+                    ]
+                    
+                    # 创建混合检索器
+                    if term_docs:
+                        terminology_retriever = HybridRetriever(
+                            vector_store=vector_manager.get_store("terminologies"),
+                            documents=term_docs
+                        )
+                    
+                    if sql_docs:
+                        sql_example_retriever = HybridRetriever(
+                            vector_store=vector_manager.get_store("sql_examples"),
+                            documents=sql_docs
+                        )
+                    
+                    if knowledge_docs:
+                        knowledge_retriever = HybridRetriever(
+                            vector_store=vector_manager.get_store("knowledge"),
+                            documents=knowledge_docs
+                        )
+                    
+                except Exception as e:
+                    logger.warning(f"创建检索器失败: {e}，将使用简化版本")
+            
+            # 如果检索器创建失败，使用空检索器（降级方案）
+            if not terminology_retriever:
+                try:
+                    from langchain_core.retrievers import BaseRetriever
+                except ImportError:
+                    from langchain.schema import BaseRetriever
             
             class EmptyRetriever(BaseRetriever):
                 def _get_relevant_documents(self, query: str):
@@ -933,41 +979,53 @@ async def send_message(
             sql_example_retriever = EmptyRetriever()
             knowledge_retriever = EmptyRetriever()
         
-        # 10. 创建RAG工作流
-        rag_workflow = RAGWorkflow(
+            # 10. 创建RAG工作流
+            rag_workflow = RAGWorkflow(
             llm=langchain_llm,
             terminology_retriever=terminology_retriever,
             sql_example_retriever=sql_example_retriever,
             knowledge_retriever=knowledge_retriever,
             max_retries=3
-        )
+            )
         
-        # 11. 运行工作流（使用改写后的问题，传递选择的表列表）
-        workflow_result = rag_workflow.run(
+            # 11. 运行工作流（使用改写后的问题，传递选择的表列表）
+            workflow_result = rag_workflow.run(
             question=rewritten_question,  # 使用改写后的问题
             db_config=db_config,
             selected_tables=selected_tables  # 使用从会话或请求中获取的表列表
-        )
+            )
         
-        # 12. 提取结果
-        # 优先使用final_sql，如果没有则使用sql（确保SQL被正确提取）
-        final_sql = workflow_result.get("final_sql") or workflow_result.get("sql", "")
-        data = workflow_result.get("data", [])
-        chart_config = workflow_result.get("chart_config")
-        error = workflow_result.get("error")
-        execution_error = workflow_result.get("execution_error")
-        contains_complex_sql = workflow_result.get("contains_complex_sql", False)
+            # 12. 提取结果
+            # 确保workflow_result存在
+            if not workflow_result:
+                logger.warning("workflow_result为None，使用默认值")
+                workflow_result = {}
+            
+            # 优先使用final_sql，如果没有则使用sql（确保SQL被正确提取）
+            final_sql = workflow_result.get("final_sql") or workflow_result.get("sql", "")
+            data = workflow_result.get("data", [])
+            chart_config = workflow_result.get("chart_config")
+            error = workflow_result.get("error")
+            execution_error = workflow_result.get("execution_error")
+            contains_complex_sql = workflow_result.get("contains_complex_sql", False)
+            error_content = None  # 初始化error_content，避免未定义错误
+            
+            # 确保data和chart_config被初始化
+            if data is None:
+                data = []
+            if chart_config is None:
+                chart_config = {}
         
-        # 记录日志，确保SQL被正确提取
-        logger.info(f"提取结果：final_sql={final_sql[:100] if final_sql else '空'}, error={error}, execution_error={execution_error}")
+            # 记录日志，确保SQL被正确提取
+            logger.info(f"提取结果：final_sql={final_sql[:100] if final_sql else '空'}, error={error}, execution_error={execution_error}, request.edited_sql={request.edited_sql if hasattr(request, 'edited_sql') else 'N/A'}")
         
-        # 如果SQL包含复杂逻辑（如CREATE语句），返回友好提示和SQL
-        if contains_complex_sql and final_sql:
-            # 保存消息，包含SQL和友好提示
-            assistant_message = ChatMessage(
-                session_id=session_id,
-                role="assistant",
-                content=f"""生成的SQL查询涉及复杂逻辑，需要创建临时表。为了数据安全，系统不会自动执行此类SQL。
+            # 如果SQL包含复杂逻辑（如CREATE语句），返回友好提示和SQL
+            if contains_complex_sql and final_sql:
+                # 保存消息，包含SQL和友好提示
+                assistant_message = ChatMessage(
+                    session_id=session_id,
+                    role="assistant",
+                    content=f"""生成的SQL查询涉及复杂逻辑，需要创建临时表。为了数据安全，系统不会自动执行此类SQL。
 
 **生成的SQL语句：**
 ```sql
@@ -978,90 +1036,105 @@ async def send_message(
 - 此SQL包含CREATE等语句，系统不会自动执行
 - 您可以在数据库管理工具中手动执行此SQL
 - 建议：如果可能，请尝试用更简单的查询方式重新提问，例如使用子查询或CTE（WITH子句）代替临时表""",
-                sql_statement=final_sql,
-                tokens_used=0
-            )
-            db.add(assistant_message)
-            session.updated_at = datetime.now()
-            db.commit()
-            db.refresh(assistant_message)
-            
-            # 生成推荐问题
-            recommended_questions = []
-            try:
-                recommended_questions = await generate_dynamic_recommendations(
-                    session_id=session_id,
-                    current_question=request.question,
-                    sql=final_sql,
-                    data=None,
-                    db=db,
-                    current_user=current_user,
-                    selected_tables=selected_tables
+                    sql_statement=final_sql,
+                    tokens_used=0
                 )
-            except Exception as e:
-                logger.warning(f"生成动态推荐问题失败: {e}，将返回空列表")
-            
-            return ResponseModel(
-                success=True,
-                message="已生成SQL语句（需要手动执行）",
-                data={
-                    "id": assistant_message.id,
-                    "sql": final_sql,
-                    "explanation": "生成的SQL涉及复杂逻辑，需要手动执行",
-                    "contains_complex_sql": True,
-                    "chart_type": None,
-                    "chart_config": None,
-                    "data": [],
-                    "data_total": 0,
-                    "tokens_used": 0,
-                    "model": model_config.model_name,
-                    "recommended_questions": recommended_questions
-                }
-            )
-        
-        # 如果用户提供了编辑后的SQL，直接执行它
-        if request.edited_sql:
-            final_sql = request.edited_sql
-            try:
-                from app.core.rag_langchain.sql_executor import SQLExecutor
-                executor = SQLExecutor(
-                    db_config=db_config,
-                    timeout=30,
-                    max_rows=1000,
-                    enable_cache=False
-                )
-                result = executor.execute(final_sql, user_id=current_user.id)
+                db.add(assistant_message)
+                session.updated_at = datetime.now()
+                db.commit()
+                db.refresh(assistant_message)
                 
-                if result["success"]:
-                    data = result["data"]
-                    # 重新生成图表配置
-                    from app.core.rag_langchain.chart_service import ChartService
-                    chart_service = ChartService()
-                    chart_config = chart_service.generate_chart_config(
-                        question=request.question,
+                # 生成推荐问题
+                recommended_questions = []
+                try:
+                    recommended_questions = await generate_dynamic_recommendations(
+                        session_id=session_id,
+                        current_question=request.question,
                         sql=final_sql,
-                        data=data,
-                        columns=result.get("columns", [])
+                        data=None,
+                        db=db,
+                        current_user=current_user,
+                        selected_tables=selected_tables
                     )
-                    error = None
-                    execution_error = None
-                else:
-                    error = result.get("error", "SQL执行失败")
+                except Exception as e:
+                    logger.warning(f"生成动态推荐问题失败: {e}，将返回空列表")
+                
+                return ResponseModel(
+                    success=True,
+                    message="已生成SQL语句（需要手动执行）",
+                    data={
+                        "id": assistant_message.id,
+                        "sql": final_sql,
+                        "explanation": "生成的SQL涉及复杂逻辑，需要手动执行",
+                        "contains_complex_sql": True,
+                        "chart_type": None,
+                        "chart_config": None,
+                        "data": [],
+                        "data_total": 0,
+                        "tokens_used": 0,
+                        "model": model_config.model_name,
+                        "recommended_questions": recommended_questions
+                    }
+                )
+            
+            # 如果用户提供了编辑后的SQL，直接执行它
+            if request.edited_sql:
+                logger.info(f"用户提供了编辑后的SQL，准备执行: {request.edited_sql[:100] if request.edited_sql else '空'}")
+                final_sql = request.edited_sql
+                error = None
+                execution_error = None
+                data = []  # 初始化data变量
+                chart_config = None  # 初始化chart_config变量
+                try:
+                    from app.core.rag_langchain.sql_executor import SQLExecutor
+                    executor = SQLExecutor(
+                        db_config=db_config,
+                        timeout=30,
+                        max_rows=1000,
+                        enable_cache=True,  # 启用缓存
+                        cache_ttl=600  # 10分钟
+                    )
+                    result = executor.execute(final_sql, user_id=current_user.id)
+                    
+                    if result["success"]:
+                        data = result["data"]
+                        # 重新生成图表配置
+                        from app.core.rag_langchain.chart_service import ChartService
+                        chart_service = ChartService()
+                        chart_config = chart_service.generate_chart_config(
+                            question=request.question,
+                            data=data,
+                            sql=final_sql
+                        )
+                        error = None
+                        execution_error = None
+                        # 设置workflow_result，确保后续流程能正常工作
+                        if not workflow_result:
+                            workflow_result = {}
+                        workflow_result["explanation"] = f"用户编辑的SQL执行成功，返回 {len(data)} 条数据" if data else "用户编辑的SQL执行成功，但未返回数据"
+                        workflow_result["data"] = data
+                        workflow_result["chart_config"] = chart_config
+                    else:
+                        error = result.get("error", "SQL执行失败")
+                        execution_error = error
+                        data = []
+                except Exception as e:
+                    logger.error(f"执行用户编辑的SQL失败: {e}", exc_info=True)
+                    error = str(e)
                     execution_error = error
                     data = []
-            except Exception as e:
-                logger.error(f"执行用户编辑的SQL失败: {e}", exc_info=True)
-                error = str(e)
-                execution_error = error
-                data = []
+            else:
+                logger.info(f"用户未提供编辑后的SQL，跳过SQL执行流程")
         
-        # 如果有错误，返回错误信息但包含SQL，允许用户编辑重试或继续用自然语言提问
-        if error or execution_error:
-            # 使用LLM生成友好的错误回复
-            error_content = None
-            try:
-                # 构建错误提示词
-                error_prompt = f"""用户提问：{request.question}
+            # 如果有错误，返回错误信息但包含SQL，允许用户编辑重试或继续用自然语言提问
+            logger.info(f"错误检查：error={error}, execution_error={execution_error}, error类型={type(error)}, execution_error类型={type(execution_error)}")
+            if error or execution_error:
+                logger.info(f"进入错误处理流程：error={error}, execution_error={execution_error}")
+                # 使用LLM生成友好的错误回复
+                error_content = None
+                try:
+                    # 构建错误提示词
+                    error_prompt = f"""用户提问：{request.question}
 
 生成的SQL语句：
 {final_sql if final_sql else '无'}
@@ -1077,40 +1150,40 @@ SQL执行失败，错误信息：{execution_error or error}
 6. 在回复中明确显示生成的SQL语句
 
 请直接返回回复内容，不要包含其他格式："""
-                
-                # 调用LLM生成友好回复（异步）
-                messages = [{"role": "user", "content": error_prompt}]
-                llm_response = await llm_client.chat_completion(
-                    messages,
-                    temperature=0.7,
-                    max_tokens=400
-                )
-                
-                # 解析响应
-                if isinstance(llm_response, dict):
-                    error_content = llm_response.get("content", "") or llm_response.get("message", {}).get("content", "")
-                else:
-                    error_content = str(llm_response)
-                
-                # 清理响应
-                error_content = error_content.strip()
-                # 移除可能的Markdown格式
-                import re
-                error_content = re.sub(r'^```.*?\n', '', error_content, flags=re.DOTALL)
-                error_content = re.sub(r'\n```.*?$', '', error_content, flags=re.DOTALL)
-                error_content = error_content.strip()
-                
-                # 如果LLM回复为空，使用默认回复
-                if not error_content:
-                    error_content = None
                     
-            except Exception as e:
-                logger.warning(f"使用LLM生成友好错误回复失败: {e}，将使用默认回复")
-                error_content = None
-            
-            # 如果LLM生成失败，使用默认回复
-            if not error_content:
-                error_content = f"""很抱歉，SQL执行失败了。
+                    # 调用LLM生成友好回复（异步）
+                    messages = [{"role": "user", "content": error_prompt}]
+                    llm_response = await llm_client.chat_completion(
+                        messages,
+                        temperature=0.7,
+                        max_tokens=400
+                    )
+                    
+                    # 解析响应
+                    if isinstance(llm_response, dict):
+                        error_content = llm_response.get("content", "") or llm_response.get("message", {}).get("content", "")
+                    else:
+                        error_content = str(llm_response)
+                    
+                    # 清理响应
+                    error_content = error_content.strip()
+                    # 移除可能的Markdown格式
+                    import re
+                    error_content = re.sub(r'^```.*?\n', '', error_content, flags=re.DOTALL)
+                    error_content = re.sub(r'\n```.*?$', '', error_content, flags=re.DOTALL)
+                    error_content = error_content.strip()
+                    
+                    # 如果LLM回复为空，使用默认回复
+                    if not error_content:
+                        error_content = None
+                        
+                except Exception as e:
+                    logger.warning(f"使用LLM生成友好错误回复失败: {e}，将使用默认回复")
+                    error_content = None
+                
+                # 如果LLM生成失败，使用默认回复
+                if not error_content:
+                    error_content = f"""很抱歉，SQL执行失败了。
 
 **执行的SQL：**
 ```sql
@@ -1124,160 +1197,249 @@ SQL执行失败，错误信息：{execution_error or error}
 1. 如果SQL包含CREATE等语句，系统不允许执行此类操作。建议使用子查询或CTE（WITH子句）代替临时表
 2. 您可以直接编辑SQL并重试
 3. 或者继续用自然语言描述您的需求，我会重新生成SQL"""
+                
+                # 确保返回的SQL不为空（从多个来源尝试获取）
+                sql_to_return = final_sql
+                if not sql_to_return:
+                    sql_to_return = workflow_result.get("final_sql", "") or workflow_result.get("sql", "")
+                if not sql_to_return:
+                    # 如果还是没有，尝试从workflow_result的final_result中获取
+                    final_result = workflow_result.get("final_result", {})
+                    sql_to_return = final_result.get("final_sql", "") or final_result.get("sql", "")
+                
+                # 保存错误消息（确保SQL被正确保存）
+                # 确保error_content不为None
+                if not error_content or (isinstance(error_content, str) and error_content.strip() == ""):
+                    error_content = f"""很抱歉，SQL执行失败了。
+
+**执行的SQL：**
+```sql
+{final_sql if final_sql else '无'}
+```
+
+**错误原因：**
+{execution_error or error}
+
+**解决建议：**
+1. 如果SQL包含CREATE等语句，系统不允许执行此类操作。建议使用子查询或CTE（WITH子句）代替临时表
+2. 您可以直接编辑SQL并重试
+3. 或者继续用自然语言描述您的需求，我会重新生成SQL"""
+                
+                logger.info(f"错误处理 - 最终error_content长度: {len(error_content) if error_content else 0}")
+                
+                assistant_message = ChatMessage(
+                    session_id=session_id,
+                    role="assistant",
+                    content=error_content or "SQL执行失败，请查看错误信息",  # 双重保险
+                    sql_statement=sql_to_return,  # 确保SQL被保存
+                    error_message=execution_error or error,
+                    tokens_used=0
+                )
+                db.add(assistant_message)
+                session.updated_at = datetime.now()
+                db.commit()
+                db.refresh(assistant_message)
+                
+                # 即使有错误，也生成推荐问题（基于当前上下文、数据源和选择的表）
+                recommended_questions = []
+                try:
+                    recommended_questions = await generate_dynamic_recommendations(
+                        session_id=session_id,
+                        current_question=request.question,
+                        sql=sql_to_return,  # 使用确保不为空的SQL
+                        data=None,  # 错误时没有数据
+                        db=db,
+                        current_user=current_user,
+                        selected_tables=selected_tables  # 传递选择的表列表
+                    )
+                except Exception as e:
+                    logger.warning(f"生成动态推荐问题失败: {e}，将返回空列表")
+                
+                # 记录日志，确保SQL被正确提取
+                logger.info(f"错误处理：SQL={sql_to_return[:100] if sql_to_return else '空'}, 错误={execution_error or error}")
+                
+                return ResponseModel(
+                    success=False,
+                    message="SQL执行失败",
+                    data={
+                        "id": assistant_message.id,
+                        "sql": sql_to_return,  # 确保SQL被返回
+                        "error": execution_error or error,
+                        "error_message": execution_error or error,
+                        "can_retry": True,  # 允许重试
+                        "can_continue_natural_language": True,  # 允许继续用自然语言提问
+                        "data": [],
+                        "data_total": 0,
+                        "recommended_questions": recommended_questions  # 即使错误也提供推荐问题
+                    }
+                )
+        
+            # 13. 并行执行数据总结和推荐问题生成（优化性能）
+            data_summary = None
+            recommended_questions = []
+        
+            if data and len(data) > 0 and llm_client:
+                # 并行执行数据总结和推荐问题生成
+                try:
+                    # 创建任务（协程需要先创建为任务才能并行执行）
+                    data_summary_task = asyncio.create_task(generate_data_summary(
+                        question=request.question,
+                        sql=final_sql,
+                        data=data,
+                        llm_client=llm_client
+                    ))
+                    recommended_questions_task = asyncio.create_task(generate_dynamic_recommendations(
+                        session_id=session_id,
+                        current_question=request.question,
+                        sql=final_sql,
+                        data=data[:10] if data else None,
+                        db=db,
+                        current_user=current_user,
+                        selected_tables=selected_tables,
+                        llm_client=llm_client
+                    ))
+                    
+                    # 并行等待两个任务完成
+                    data_summary, recommended_questions = await asyncio.gather(
+                        data_summary_task,
+                        recommended_questions_task,
+                        return_exceptions=True
+                    )
+                    
+                    # 处理异常
+                    if isinstance(data_summary, Exception):
+                        logger.warning(f"生成数据总结失败: {data_summary}，不影响主流程")
+                        data_summary = None
+                    elif data_summary:
+                        logger.info(f"生成数据总结成功，长度: {len(data_summary)}")
+                    
+                    if isinstance(recommended_questions, Exception):
+                        logger.warning(f"生成动态推荐问题失败: {recommended_questions}，将返回空列表")
+                        recommended_questions = []
+                except Exception as e:
+                    logger.warning(f"并行生成数据总结和推荐问题失败: {e}，不影响主流程")
+                    # 降级：尝试单独生成推荐问题
+                    try:
+                        recommended_questions = await generate_dynamic_recommendations(
+                            session_id=session_id,
+                            current_question=request.question,
+                            sql=final_sql,
+                            data=data[:10] if data else None,
+                            db=db,
+                            current_user=current_user,
+                            selected_tables=selected_tables,
+                            llm_client=llm_client
+                        )
+                    except Exception as e2:
+                        logger.warning(f"生成推荐问题失败: {e2}")
+                        recommended_questions = []
+        
+            # 15. 保存AI回复（包含数据总结）
+            # 如果有数据总结，将其合并到explanation中
+            logger.info(f"准备保存AI回复: workflow_result存在={workflow_result is not None}, data长度={len(data) if data else 0}, error={error}, execution_error={execution_error}")
             
-            # 确保返回的SQL不为空（从多个来源尝试获取）
-            sql_to_return = final_sql
-            if not sql_to_return:
-                sql_to_return = workflow_result.get("final_sql", "") or workflow_result.get("sql", "")
-            if not sql_to_return:
-                # 如果还是没有，尝试从workflow_result的final_result中获取
-                final_result = workflow_result.get("final_result", {})
-                sql_to_return = final_result.get("final_sql", "") or final_result.get("sql", "")
+            explanation_content = workflow_result.get("explanation") if workflow_result else None
+            logger.info(f"步骤1 - 初始explanation_content: {explanation_content}, data长度: {len(data) if data else 0}")
             
-            # 保存错误消息（确保SQL被正确保存）
+            if not explanation_content:
+                # 如果没有explanation，生成一个默认的
+                if data and len(data) > 0:
+                    explanation_content = f"SQL查询执行成功，返回 {len(data)} 条数据"
+                else:
+                    explanation_content = "SQL查询执行成功，但未返回数据"
+                logger.info(f"步骤2 - 生成默认explanation_content: {explanation_content}")
+            
+            if data_summary:
+                explanation_content = f"{explanation_content}\n\n**数据分析总结：**\n{data_summary}"
+                logger.info(f"步骤3 - 添加数据总结后的explanation_content长度: {len(explanation_content) if explanation_content else 0}")
+            
+            # 确保content不为None
+            if not explanation_content or (isinstance(explanation_content, str) and explanation_content.strip() == ""):
+                explanation_content = "SQL生成并执行成功"
+                logger.info(f"步骤4 - 使用默认explanation_content: {explanation_content}")
+            
+            logger.info(f"步骤5 - 最终explanation_content: {explanation_content[:100] if explanation_content else 'None'}, 类型: {type(explanation_content)}")
+            
+            # 最终检查，确保content不为None
+            final_content = explanation_content or "SQL生成并执行成功"
+            logger.info(f"步骤6 - 创建ChatMessage前的final_content: {final_content[:100] if final_content else 'None'}")
+            
             assistant_message = ChatMessage(
                 session_id=session_id,
                 role="assistant",
-                content=error_content,
-                sql_statement=sql_to_return,  # 确保SQL被保存
-                error_message=execution_error or error,
-                tokens_used=0
+                content=final_content,
+                sql_statement=final_sql,
+                chart_type=chart_config.get("type") if chart_config else None,
+                chart_config=json.dumps(chart_config, ensure_ascii=False) if chart_config else None,
+                query_result=json.dumps(data[:100], ensure_ascii=False) if data else None,  # 只保存前100条数据
+                tokens_used=0  # 注意：token使用量统计功能待实现，需要从LLM客户端获取
             )
             db.add(assistant_message)
+            
+            # 15. 更新会话时间
             session.updated_at = datetime.now()
+            
+            # 16. 延迟生成对话标题（不阻塞主流程）
+            # 查询会话中的用户消息数量（不包括刚创建的用户消息）
+            user_messages_count = db.query(ChatMessage).filter(
+                ChatMessage.session_id == session_id,
+                ChatMessage.role == "user",
+                ChatMessage.id != user_message.id  # 排除刚创建的用户消息
+            ).count()
+            
+            # 如果这是第一条用户消息（user_messages_count == 0），或者标题是默认标题格式，则生成新标题
+            # 使用后台任务，不阻塞响应
+            if user_messages_count == 0 or (session.title and ("新对话" in session.title or session.title.startswith("对话 "))):
+                # 创建后台任务生成标题（不等待）
+                async def generate_title_background():
+                    try:
+                        # 需要重新获取数据库会话（因为原会话可能已关闭）
+                        from app.core.database import LocalSessionLocal
+                        db_session = LocalSessionLocal()
+                        try:
+                            await generate_session_title(session, request.question, db_session, llm_client)
+                            db_session.commit()
+                        finally:
+                            db_session.close()
+                    except Exception as e:
+                        logger.warning(f"自动生成对话标题失败: {e}，保留原标题")
+                
+                # 不等待，让它在后台执行
+                asyncio.create_task(generate_title_background())
+            
             db.commit()
             db.refresh(assistant_message)
             
-            # 即使有错误，也生成推荐问题（基于当前上下文、数据源和选择的表）
-            recommended_questions = []
-            try:
-                recommended_questions = await generate_dynamic_recommendations(
-                    session_id=session_id,
-                    current_question=request.question,
-                    sql=sql_to_return,  # 使用确保不为空的SQL
-                    data=None,  # 错误时没有数据
-                    db=db,
-                    current_user=current_user,
-                    selected_tables=selected_tables  # 传递选择的表列表
-                )
-            except Exception as e:
-                logger.warning(f"生成动态推荐问题失败: {e}，将返回空列表")
-            
-            # 记录日志，确保SQL被正确提取
-            logger.info(f"错误处理：SQL={sql_to_return[:100] if sql_to_return else '空'}, 错误={execution_error or error}")
-            
             return ResponseModel(
-                success=False,
-                message="SQL执行失败",
+                success=True,
+                message="消息发送成功",
                 data={
                     "id": assistant_message.id,
-                    "sql": sql_to_return,  # 确保SQL被返回
-                    "error": execution_error or error,
-                    "error_message": execution_error or error,
-                    "can_retry": True,  # 允许重试
-                    "can_continue_natural_language": True,  # 允许继续用自然语言提问
-                    "data": [],
-                    "data_total": 0,
-                    "recommended_questions": recommended_questions  # 即使错误也提供推荐问题
+                    "sql": final_sql,
+                    "explanation": explanation_content,  # 包含数据总结的完整解释
+                    "data_summary": data_summary,  # 单独返回数据总结（可选）
+                    "chart_type": chart_config.get("type") if chart_config else None,
+                    "chart_config": chart_config,
+                    "data": data[:100] if data else [],  # 只返回前100条
+                    "data_total": len(data) if data else 0,
+                    "tokens_used": 0,  # 注意：token使用量统计功能待实现
+                    "model": model_config.model_name,
+                    "retry_count": workflow_result.get("retry_count", 0),  # 重试次数
+                    "recommended_questions": recommended_questions,  # 动态生成的推荐问题（基于当前会话上下文）
+                    "question_rewrite": question_rewrite_info  # 问题改写信息（如果有）
                 }
             )
         
-        # 13. 使用LLM对数据结果进行总结分析（如果有数据）
-        data_summary = None
-        if data and len(data) > 0 and llm_client:
-            try:
-                data_summary = await generate_data_summary(
-                    question=request.question,
-                    sql=final_sql,
-                    data=data,
-                    llm_client=llm_client
-                )
-                if data_summary:
-                    logger.info(f"生成数据总结成功，长度: {len(data_summary)}")
-            except Exception as e:
-                logger.warning(f"生成数据总结失败: {e}，不影响主流程")
-        
-        # 14. 生成动态推荐问题（基于当前会话上下文、数据源和选择的表，使用LLM生成）
-        recommended_questions = []
-        try:
-            recommended_questions = await generate_dynamic_recommendations(
-                session_id=session_id,
-                current_question=request.question,  # 使用原始问题
-                sql=final_sql,
-                data=data[:10] if data else None,  # 只使用前10条数据用于分析
-                db=db,
-                current_user=current_user,
-                selected_tables=selected_tables,  # 传递选择的表列表
-                llm_client=llm_client  # 传递LLM客户端用于生成推荐问题
-            )
+        except HTTPException:
+            raise
         except Exception as e:
-            logger.warning(f"生成动态推荐问题失败: {e}，将返回空列表")
-        
-        # 15. 保存AI回复（包含数据总结）
-        # 如果有数据总结，将其合并到explanation中
-        explanation_content = workflow_result.get("explanation", "SQL生成并执行成功")
-        if data_summary:
-            explanation_content = f"{explanation_content}\n\n**数据分析总结：**\n{data_summary}"
-        
-        assistant_message = ChatMessage(
-            session_id=session_id,
-            role="assistant",
-            content=explanation_content,
-            sql_statement=final_sql,
-            chart_type=chart_config.get("type") if chart_config else None,
-            chart_config=json.dumps(chart_config, ensure_ascii=False) if chart_config else None,
-            query_result=json.dumps(data[:100], ensure_ascii=False) if data else None,  # 只保存前100条数据
-            tokens_used=0  # 注意：token使用量统计功能待实现，需要从LLM客户端获取
-        )
-        db.add(assistant_message)
-        
-        # 15. 更新会话时间
-        session.updated_at = datetime.now()
-        
-        # 16. 如果是第一条消息，自动生成对话标题
-        # 查询会话中的用户消息数量（不包括刚创建的用户消息）
-        user_messages_count = db.query(ChatMessage).filter(
-            ChatMessage.session_id == session_id,
-            ChatMessage.role == "user",
-            ChatMessage.id != user_message.id  # 排除刚创建的用户消息
-        ).count()
-        
-        # 如果这是第一条用户消息（user_messages_count == 0），或者标题是默认标题格式，则生成新标题
-        if user_messages_count == 0 or (session.title and ("新对话" in session.title or session.title.startswith("对话 "))):
-            try:
-                await generate_session_title(session, request.question, db, llm_client)
-            except Exception as e:
-                logger.warning(f"自动生成对话标题失败: {e}，保留原标题")
-        
-        db.commit()
-        db.refresh(assistant_message)
-        
-        return ResponseModel(
-            success=True,
-            message="消息发送成功",
-            data={
-                "id": assistant_message.id,
-                "sql": final_sql,
-                "explanation": explanation_content,  # 包含数据总结的完整解释
-                "data_summary": data_summary,  # 单独返回数据总结（可选）
-                "chart_type": chart_config.get("type") if chart_config else None,
-                "chart_config": chart_config,
-                "data": data[:100] if data else [],  # 只返回前100条
-                "data_total": len(data) if data else 0,
-                "tokens_used": 0,  # 注意：token使用量统计功能待实现
-                "model": model_config.model_name,
-                "retry_count": workflow_result.get("retry_count", 0),  # 重试次数
-                "recommended_questions": recommended_questions,  # 动态生成的推荐问题（基于当前会话上下文）
-                "question_rewrite": question_rewrite_info  # 问题改写信息（如果有）
-            }
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"发送消息失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"发送消息失败: {str(e)}")
+            db.rollback()
+            # 使用%格式化避免f-string中的特殊字符问题
+            error_msg = str(e)
+            logger.error("发送消息失败: %s", error_msg, exc_info=True)
+            # 确保错误消息安全
+            safe_error_msg = error_msg.replace("{", "{{").replace("}", "}}")
+            raise HTTPException(status_code=500, detail=f"发送消息失败: {safe_error_msg}")
 
 
 def _generate_chart_config(chart_type: str, data: List[Dict[str, Any]]) -> Dict[str, Any]:

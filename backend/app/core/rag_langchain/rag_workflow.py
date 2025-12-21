@@ -3,6 +3,7 @@ RAG工作流
 使用LangGraph实现多步骤RAG流程，包含错误重试机制
 """
 import re
+import asyncio
 from typing import TypedDict, List, Dict, Any, Optional, Annotated
 from langgraph.graph import StateGraph, END
 try:
@@ -87,8 +88,7 @@ class RAGWorkflow:
         workflow = StateGraph(RAGState)
         
         # 添加节点
-        workflow.add_node("load_schema", self._load_schema)
-        workflow.add_node("retrieve_contexts", self._retrieve_contexts)
+        workflow.add_node("load_schema_and_retrieve", self._load_schema_and_retrieve_parallel)
         workflow.add_node("merge_contexts", self._merge_contexts)
         workflow.add_node("build_prompt", self._build_prompt)
         workflow.add_node("generate_sql", self._generate_sql)
@@ -97,11 +97,10 @@ class RAGWorkflow:
         workflow.add_node("generate_chart", self._generate_chart)
         
         # 设置入口
-        workflow.set_entry_point("load_schema")
+        workflow.set_entry_point("load_schema_and_retrieve")
         
         # 添加边
-        workflow.add_edge("load_schema", "retrieve_contexts")
-        workflow.add_edge("retrieve_contexts", "merge_contexts")
+        workflow.add_edge("load_schema_and_retrieve", "merge_contexts")
         workflow.add_edge("merge_contexts", "build_prompt")
         workflow.add_edge("build_prompt", "generate_sql")
         workflow.add_edge("generate_sql", "execute_sql")
@@ -122,62 +121,95 @@ class RAGWorkflow:
         
         return workflow.compile()
     
-    def _load_schema(self, state: RAGState) -> RAGState:
-        """加载Schema信息"""
-        try:
-            schema_service = SchemaService(state["db_config"])
-            state["schema_info"] = schema_service.get_table_schema(
-                table_names=state.get("selected_tables"),
-                include_sample_data=True,
-                sample_rows=5
-            )
-            logger.info(f"加载Schema信息成功，包含 {len(state['schema_info']['tables'])} 个表")
-        except Exception as e:
-            logger.error(f"加载Schema信息失败: {e}", exc_info=True)
-            state["schema_info"] = {"tables": [], "relationships": []}
-        
-        return state
-    
-    def _retrieve_contexts(self, state: RAGState) -> RAGState:
-        """检索上下文"""
+    def _load_schema_and_retrieve_parallel(self, state: RAGState) -> RAGState:
+        """并行加载Schema信息和检索上下文"""
         question = state["question"]
-        retrieved = {}
         
+        def load_schema():
+            """加载Schema信息（同步函数）"""
+            try:
+                schema_service = SchemaService(
+                    state["db_config"],
+                    enable_cache=True,  # 启用缓存
+                    cache_ttl=3600  # 1小时
+                )
+                return schema_service.get_table_schema(
+                    table_names=state.get("selected_tables"),
+                    include_sample_data=True,
+                    sample_rows=5
+                )
+            except Exception as e:
+                logger.error(f"加载Schema信息失败: {e}", exc_info=True)
+                return {"tables": [], "relationships": []}
+        
+        def retrieve_terminologies():
+            """检索术语"""
+            try:
+                if hasattr(self.terminology_retriever, 'get_relevant_documents'):
+                    return self.terminology_retriever.get_relevant_documents(question)
+                else:
+                    return self.terminology_retriever._get_relevant_documents(question)
+            except Exception as e:
+                logger.warning(f"检索术语失败: {e}")
+                return []
+        
+        def retrieve_sql_examples():
+            """检索SQL示例"""
+            try:
+                if hasattr(self.sql_example_retriever, 'get_relevant_documents'):
+                    return self.sql_example_retriever.get_relevant_documents(question)
+                else:
+                    return self.sql_example_retriever._get_relevant_documents(question)
+            except Exception as e:
+                logger.warning(f"检索SQL示例失败: {e}")
+                return []
+        
+        def retrieve_knowledge():
+            """检索业务知识"""
+            try:
+                if hasattr(self.knowledge_retriever, 'get_relevant_documents'):
+                    return self.knowledge_retriever.get_relevant_documents(question)
+                else:
+                    return self.knowledge_retriever._get_relevant_documents(question)
+            except Exception as e:
+                logger.warning(f"检索业务知识失败: {e}")
+                return []
+        
+        # 并行执行所有操作
         try:
-            # 检索术语
-            # 尝试使用get_relevant_documents（LangChain 1.x）
-            if hasattr(self.terminology_retriever, 'get_relevant_documents'):
-                retrieved["terminologies"] = self.terminology_retriever.get_relevant_documents(question)
-            else:
-                retrieved["terminologies"] = self.terminology_retriever._get_relevant_documents(question)
-            logger.info(f"检索到 {len(retrieved['terminologies'])} 个术语")
+            # 使用线程池并行执行（因为这些操作主要是I/O密集型）
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                schema_future = executor.submit(load_schema)
+                term_future = executor.submit(retrieve_terminologies)
+                sql_future = executor.submit(retrieve_sql_examples)
+                knowledge_future = executor.submit(retrieve_knowledge)
+                
+                # 等待所有任务完成
+                schema_info = schema_future.result()
+                terminologies = term_future.result()
+                sql_examples = sql_future.result()
+                knowledge = knowledge_future.result()
+            
+            state["schema_info"] = schema_info
+            state["retrieved_contexts"] = {
+                "terminologies": terminologies,
+                "sql_examples": sql_examples,
+                "knowledge": knowledge
+            }
+            
+            logger.info(f"并行加载完成：Schema包含 {len(schema_info['tables'])} 个表，"
+                       f"检索到 {len(terminologies)} 个术语，{len(sql_examples)} 个SQL示例，{len(knowledge)} 个知识条目")
         except Exception as e:
-            logger.warning(f"检索术语失败: {e}")
-            retrieved["terminologies"] = []
+            logger.error(f"并行加载失败: {e}", exc_info=True)
+            # 降级到串行执行
+            state["schema_info"] = load_schema()
+            state["retrieved_contexts"] = {
+                "terminologies": retrieve_terminologies(),
+                "sql_examples": retrieve_sql_examples(),
+                "knowledge": retrieve_knowledge()
+            }
         
-        try:
-            # 检索SQL示例
-            if hasattr(self.sql_example_retriever, 'get_relevant_documents'):
-                retrieved["sql_examples"] = self.sql_example_retriever.get_relevant_documents(question)
-            else:
-                retrieved["sql_examples"] = self.sql_example_retriever._get_relevant_documents(question)
-            logger.info(f"检索到 {len(retrieved['sql_examples'])} 个SQL示例")
-        except Exception as e:
-            logger.warning(f"检索SQL示例失败: {e}")
-            retrieved["sql_examples"] = []
-        
-        try:
-            # 检索业务知识
-            if hasattr(self.knowledge_retriever, 'get_relevant_documents'):
-                retrieved["knowledge"] = self.knowledge_retriever.get_relevant_documents(question)
-            else:
-                retrieved["knowledge"] = self.knowledge_retriever._get_relevant_documents(question)
-            logger.info(f"检索到 {len(retrieved['knowledge'])} 个知识条目")
-        except Exception as e:
-            logger.warning(f"检索业务知识失败: {e}")
-            retrieved["knowledge"] = []
-        
-        state["retrieved_contexts"] = retrieved
         return state
     
     def _merge_contexts(self, state: RAGState) -> RAGState:
@@ -286,9 +318,20 @@ class RAGWorkflow:
                 sql = self._fix_cte_sql(sql)
                 
                 # 检查SQL是否包含不允许的语句（CREATE、DROP等）
+                # 使用正则表达式匹配单词边界，避免误判字段名（如created_at）
+                import re
                 sql_upper = sql.upper().strip()
                 forbidden_keywords = ["CREATE", "DROP", "ALTER", "INSERT", "UPDATE", "DELETE", "TRUNCATE"]
-                contains_forbidden = any(keyword in sql_upper for keyword in forbidden_keywords)
+                
+                # 使用正则表达式匹配单词边界，确保只匹配SQL关键字，不匹配字段名
+                contains_forbidden = False
+                for keyword in forbidden_keywords:
+                    # 使用\b匹配单词边界，确保是完整的SQL关键字
+                    pattern = r'\b' + re.escape(keyword) + r'\b'
+                    if re.search(pattern, sql_upper):
+                        contains_forbidden = True
+                        logger.warning(f"检测到SQL关键字 {keyword}，SQL预览: {sql[:200]}...")
+                        break
                 
                 if contains_forbidden:
                     # 如果包含不允许的语句，标记为需要用户手动处理
@@ -404,7 +447,8 @@ class RAGWorkflow:
                 db_config=db_config,
                 timeout=30,
                 max_rows=1000,
-                enable_cache=False
+                enable_cache=True,  # 启用缓存
+                cache_ttl=600  # 10分钟
             )
             
             result = executor.execute(sql)

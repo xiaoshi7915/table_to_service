@@ -2,6 +2,9 @@
 数据库Schema服务
 提取表结构、关联关系、样例数据等信息
 """
+import hashlib
+import json
+import time
 from typing import Dict, Any, List, Optional
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session
@@ -9,20 +12,27 @@ from loguru import logger
 
 from app.models import DatabaseConfig
 from app.core.db_factory import DatabaseConnectionFactory
+from app.core.cache import get_cache_service
+from app.core.performance_monitor import get_performance_monitor, track_time
 
 
 class SchemaService:
     """数据库Schema服务"""
     
-    def __init__(self, db_config: DatabaseConfig):
+    def __init__(self, db_config: DatabaseConfig, enable_cache: bool = True, cache_ttl: int = 3600):
         """
         初始化Schema服务
         
         Args:
             db_config: 数据库配置
+            enable_cache: 是否启用缓存
+            cache_ttl: 缓存过期时间（秒），默认1小时
         """
         self.db_config = db_config
         self.db_type = db_config.db_type or "mysql"
+        self.enable_cache = enable_cache
+        self.cache_ttl = cache_ttl
+        self.cache_service = get_cache_service() if enable_cache else None
     
     def get_table_schema(
         self,
@@ -41,6 +51,20 @@ class SchemaService:
         Returns:
             Schema信息字典
         """
+        start_time = time.time()
+        
+        # 检查缓存
+        if self.enable_cache and self.cache_service:
+            cache_key = self._generate_cache_key(table_names, include_sample_data, sample_rows)
+            cached_result = self.cache_service.get(cache_key)
+            if cached_result:
+                elapsed_time = time.time() - start_time
+                logger.info(f"从缓存获取Schema信息: {len(table_names or [])} 个表")
+                get_performance_monitor().record_schema_load(elapsed_time, from_cache=True)
+                return cached_result
+            else:
+                get_performance_monitor().record_cache_miss("schema")
+        
         try:
             engine = DatabaseConnectionFactory.create_engine(self.db_config)
             inspector = inspect(engine)
@@ -84,12 +108,25 @@ class SchemaService:
             
             engine.dispose()
             
-            return {
+            elapsed_time = time.time() - start_time
+            
+            result = {
                 "db_type": self.db_type,
                 "database": self.db_config.database,
                 "tables": tables_info,
                 "relationships": relationships
             }
+            
+            # 记录性能指标
+            get_performance_monitor().record_schema_load(elapsed_time, from_cache=False)
+            
+            # 缓存结果
+            if self.enable_cache and self.cache_service:
+                cache_key = self._generate_cache_key(table_names, include_sample_data, sample_rows)
+                self.cache_service.set(cache_key, result, ttl=self.cache_ttl)
+                logger.debug(f"已缓存Schema信息: {len(tables_info)} 个表")
+            
+            return result
             
         except Exception as e:
             logger.error(f"获取Schema信息失败: {e}", exc_info=True)
@@ -99,6 +136,54 @@ class SchemaService:
                 "tables": [],
                 "relationships": []
             }
+    
+    def _generate_cache_key(
+        self,
+        table_names: Optional[List[str]],
+        include_sample_data: bool,
+        sample_rows: int
+    ) -> str:
+        """
+        生成Schema缓存键
+        
+        Args:
+            table_names: 表名列表
+            include_sample_data: 是否包含样例数据
+            sample_rows: 样例数据行数
+            
+        Returns:
+            缓存键字符串
+        """
+        key_data = {
+            "db_config_id": self.db_config.id,
+            "table_names": sorted(table_names) if table_names else None,
+            "include_sample_data": include_sample_data,
+            "sample_rows": sample_rows
+        }
+        key_str = json.dumps(key_data, sort_keys=True, ensure_ascii=False)
+        key_hash = hashlib.sha256(key_str.encode('utf-8')).hexdigest()
+        return f"schema:{key_hash}"
+    
+    def clear_cache(self, table_names: Optional[List[str]] = None):
+        """
+        清除Schema缓存
+        
+        Args:
+            table_names: 表名列表（如果为None，清除所有相关缓存）
+        """
+        if not self.cache_service:
+            return
+        
+        if table_names:
+            # 清除特定表的缓存
+            cache_key = self._generate_cache_key(table_names, True, 5)
+            self.cache_service.delete(cache_key)
+            logger.info(f"已清除表 {table_names} 的Schema缓存")
+        else:
+            # 清除所有相关缓存（使用模式匹配）
+            pattern = f"schema:*"
+            count = self.cache_service.clear(pattern)
+            logger.info(f"已清除 {count} 个Schema缓存项")
     
     def _get_table_info(self, inspector: Any, table_name: str) -> Dict[str, Any]:
         """

@@ -12,9 +12,13 @@ from loguru import logger
 try:
     import redis
     REDIS_AVAILABLE = True
-except ImportError:
+    logger.debug(f"Redis库导入成功，版本: {getattr(redis, '__version__', 'unknown')}")
+except ImportError as e:
     REDIS_AVAILABLE = False
-    logger.warning("Redis未安装，将使用内存缓存")
+    logger.warning(f"Redis未安装，将使用内存缓存: {e}")
+except Exception as e:
+    REDIS_AVAILABLE = False
+    logger.warning(f"Redis导入时发生异常，将使用内存缓存: {e}")
 
 
 class CacheService:
@@ -37,25 +41,85 @@ class CacheService:
         if redis_url and REDIS_AVAILABLE:
             try:
                 # 解析Redis URL，支持密码
-                self.redis_client = redis.from_url(
-                    redis_url, 
-                    decode_responses=True,
-                    socket_connect_timeout=5,
-                    socket_timeout=5
-                )
-                self.redis_client.ping()
-                logger.info(f"✅ 使用Redis作为缓存后端: {redis_url.split('@')[-1] if '@' in redis_url else redis_url}")
-            except redis.ConnectionError as e:
-                logger.warning(f"Redis连接失败，将使用内存缓存: {e}")
-                self.redis_client = None
+                safe_url = redis_url.split('@')[-1] if '@' in redis_url else redis_url
+                logger.debug(f"尝试连接Redis: {safe_url}")
+                
+                # 尝试多种连接方式
+                connection_success = False
+                last_error = None
+                
+                # 方式1: 使用from_url（推荐方式）
+                try:
+                    self.redis_client = redis.from_url(
+                        redis_url, 
+                        decode_responses=True,
+                        socket_connect_timeout=5,
+                        socket_timeout=5,
+                        socket_keepalive=True,
+                        health_check_interval=30
+                    )
+                    # 测试连接
+                    self.redis_client.ping()
+                    connection_success = True
+                    logger.info(f"✅ 使用Redis作为缓存后端: {safe_url}")
+                except Exception as e1:
+                    last_error = e1
+                    logger.debug(f"Redis from_url连接失败: {type(e1).__name__}: {e1}")
+                    
+                    # 方式2: 尝试直接连接（不使用decode_responses）
+                    try:
+                        # 解析URL获取连接参数
+                        from urllib.parse import urlparse
+                        parsed = urlparse(redis_url)
+                        password = parsed.password if parsed.password else None
+                        host = parsed.hostname or '127.0.0.1'
+                        port = parsed.port or 6379
+                        db = int(parsed.path.lstrip('/')) if parsed.path else 0
+                        
+                        self.redis_client = redis.Redis(
+                            host=host,
+                            port=port,
+                            db=db,
+                            password=password,
+                            decode_responses=False,  # 先不使用decode_responses
+                            socket_connect_timeout=5,
+                            socket_timeout=5,
+                            socket_keepalive=True
+                        )
+                        # 测试连接
+                        result = self.redis_client.ping()
+                        if result:
+                            # 如果成功，重新创建支持decode_responses的客户端
+                            self.redis_client = redis.Redis(
+                                host=host,
+                                port=port,
+                                db=db,
+                                password=password,
+                                decode_responses=True,
+                                socket_connect_timeout=5,
+                                socket_timeout=5,
+                                socket_keepalive=True
+                            )
+                            self.redis_client.ping()
+                            connection_success = True
+                            logger.info(f"✅ 使用Redis作为缓存后端（直接连接）: {host}:{port}/{db}")
+                    except Exception as e2:
+                        last_error = e2
+                        logger.debug(f"Redis直接连接也失败: {type(e2).__name__}: {e2}")
+                
+                if not connection_success:
+                    error_msg = f"{type(last_error).__name__}: {last_error}" if last_error else "未知错误"
+                    logger.warning(f"Redis连接失败，将使用内存缓存: {error_msg}。请检查Redis服务配置（可能需要密码或特殊配置）")
+                    self.redis_client = None
+                    
             except Exception as e:
-                logger.warning(f"Redis初始化失败，将使用内存缓存: {e}")
+                logger.warning(f"Redis初始化失败，将使用内存缓存: {type(e).__name__}: {e}")
                 self.redis_client = None
         else:
             if not REDIS_AVAILABLE:
-                logger.info("使用内存缓存（Redis库未安装）")
+                logger.warning(f"使用内存缓存（Redis库未安装）。REDIS_AVAILABLE={REDIS_AVAILABLE}, redis_url={redis_url}")
             else:
-                logger.info("使用内存缓存（Redis未配置）")
+                logger.info(f"使用内存缓存（Redis未配置）。REDIS_AVAILABLE={REDIS_AVAILABLE}, redis_url={redis_url}")
         
         # 如果使用内存缓存，启动定期清理任务
         if self.redis_client is None:
@@ -277,6 +341,8 @@ def get_cache_service() -> CacheService:
         redis_url = getattr(settings, 'REDIS_URL', None)
         cache_ttl = getattr(settings, 'CACHE_TTL', 3600)
         
+        logger.debug(f"初始化缓存服务: REDIS_AVAILABLE={REDIS_AVAILABLE}, redis_url={redis_url}")
+        
         # 如果Redis URL为空，尝试构建默认URL
         if not redis_url:
             redis_host = "127.0.0.1"
@@ -288,6 +354,9 @@ def get_cache_service() -> CacheService:
                 redis_url = f"redis://:{redis_password}@{redis_host}:{redis_port}/{redis_db}"
             else:
                 redis_url = f"redis://{redis_host}:{redis_port}/{redis_db}"
+            
+            logger.debug(f"构建默认Redis URL: {redis_url}")
         
         _cache_service = CacheService(redis_url=redis_url, default_ttl=cache_ttl)
     return _cache_service
+

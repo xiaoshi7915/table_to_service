@@ -4,6 +4,8 @@ SQL执行服务
 """
 import time
 import re
+import hashlib
+import json
 from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
@@ -14,6 +16,8 @@ from app.core.db_factory import DatabaseConnectionFactory
 from app.core.sql_dialect import SQLDialectFactory
 from app.core.data_masking import DataMaskingService
 from app.core.log_sanitizer import safe_log_sql
+from app.core.cache import get_cache_service
+from app.core.performance_monitor import get_performance_monitor, track_time
 
 
 class SQLExecutor:
@@ -24,7 +28,8 @@ class SQLExecutor:
         db_config: DatabaseConfig,
         timeout: int = 30,
         max_rows: int = 1000,
-        enable_cache: bool = False
+        enable_cache: bool = True,
+        cache_ttl: int = 600  # 默认10分钟
     ):
         """
         初始化SQL执行器
@@ -34,12 +39,15 @@ class SQLExecutor:
             timeout: 查询超时时间（秒）
             max_rows: 最大返回行数
             enable_cache: 是否启用缓存
+            cache_ttl: 缓存过期时间（秒），默认10分钟
         """
         self.db_config = db_config
         self.timeout = timeout
         self.max_rows = max_rows
         self.enable_cache = enable_cache
+        self.cache_ttl = cache_ttl
         self.db_type = db_config.db_type or "mysql"
+        self.cache_service = get_cache_service() if enable_cache else None
     
     def execute(
         self,
@@ -79,7 +87,30 @@ class SQLExecutor:
         Returns:
             执行结果字典
         """
+        with track_time(f"SQL执行: {safe_log_sql(sql, 50)}"):
+            return self._execute_sql_internal(sql, params, user_id, client_ip)
+    
+    def _execute_sql_internal(
+        self,
+        sql: str,
+        params: Optional[Dict[str, Any]] = None,
+        user_id: Optional[int] = None,
+        client_ip: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """内部SQL执行方法"""
         start_time = time.time()
+        
+        # 0. 检查缓存（如果启用）
+        if self.enable_cache and self.cache_service:
+            cache_key = self._generate_cache_key(sql, params)
+            cached_result = self.cache_service.get(cache_key)
+            if cached_result:
+                logger.info(f"从缓存获取SQL执行结果: {safe_log_sql(sql, 100)}")
+                get_performance_monitor().record_sql_execution(0.001, from_cache=True)
+                # 更新执行时间为当前时间（但保持原始执行时间信息）
+                cached_result["execution_time"] = 0.001  # 缓存命中，几乎无耗时
+                cached_result["from_cache"] = True
+                return cached_result
         
         # 1. 安全验证
         self._validate_sql_safety(sql)
@@ -132,14 +163,28 @@ class SQLExecutor:
                 # 5. 审计日志
                 self._log_query(sql, user_id, client_ip, elapsed_time, len(processed_data))
                 
-                return {
+                # 6. 记录性能指标
+                get_performance_monitor().record_sql_execution(elapsed_time, from_cache=False)
+                
+                result = {
                     "success": True,
                     "data": processed_data,
                     "row_count": len(processed_data),
                     "total_rows": len(rows),  # 实际查询到的行数（可能超过max_rows）
                     "columns": list(columns),
-                    "execution_time": elapsed_time
+                    "execution_time": elapsed_time,
+                    "from_cache": False
                 }
+                
+                # 7. 缓存结果（如果启用且执行成功）
+                if self.enable_cache and self.cache_service:
+                    cache_key = self._generate_cache_key(sql, params)
+                    # 只缓存较小的结果（避免内存占用过大）
+                    if len(processed_data) <= 1000:
+                        self.cache_service.set(cache_key, result, ttl=self.cache_ttl)
+                        logger.debug(f"已缓存SQL执行结果: {safe_log_sql(sql, 100)}")
+                
+                return result
                 
             finally:
                 # 关闭数据库会话
@@ -162,7 +207,8 @@ class SQLExecutor:
                 "error": error_msg,
                 "data": [],
                 "row_count": 0,
-                "execution_time": elapsed_time
+                "execution_time": elapsed_time,
+                "from_cache": False
             }
         finally:
             # 注意：这里不dispose引擎，因为引擎应该被缓存和复用
@@ -187,6 +233,8 @@ class SQLExecutor:
             raise ValueError("只允许执行SELECT查询语句")
         
         # 禁止危险操作（修改数据操作）
+        # 使用正则表达式匹配单词边界，避免误判字段名（如created_at）
+        import re
         dangerous_keywords = [
             "DROP", "DELETE", "TRUNCATE", "ALTER", "CREATE",
             "INSERT", "UPDATE", "REPLACE", "GRANT", "REVOKE",
@@ -194,7 +242,9 @@ class SQLExecutor:
         ]
         
         for keyword in dangerous_keywords:
-            if keyword in sql_upper:
+            # 使用\b匹配单词边界，确保只匹配SQL关键字，不匹配字段名或字符串值
+            pattern = r'\b' + re.escape(keyword) + r'\b'
+            if re.search(pattern, sql_upper):
                 raise ValueError(f"禁止执行包含 {keyword} 的SQL语句。您没有权限执行修改数据的操作，请使用查询操作。")
         
         # 检查是否查询所有数据明细（没有WHERE条件且没有LIMIT）
@@ -303,6 +353,30 @@ class SQLExecutor:
             # 脱敏失败不影响主流程，返回原始数据
         
         return data
+    
+    def _generate_cache_key(self, sql: str, params: Optional[Dict[str, Any]] = None) -> str:
+        """
+        生成SQL执行缓存键
+        
+        Args:
+            sql: SQL语句
+            params: 参数字典
+            
+        Returns:
+            缓存键字符串
+        """
+        # 构建缓存键数据
+        key_data = {
+            "sql": sql.strip().upper(),  # 规范化SQL（去除空格，转大写）
+            "params": params or {},
+            "db_config_id": self.db_config.id,
+            "max_rows": self.max_rows
+        }
+        
+        # 生成hash
+        key_str = json.dumps(key_data, sort_keys=True, ensure_ascii=False)
+        key_hash = hashlib.sha256(key_str.encode('utf-8')).hexdigest()
+        return f"sql_execution:{key_hash}"
     
     def _log_query(
         self,
