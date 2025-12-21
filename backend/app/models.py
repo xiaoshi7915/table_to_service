@@ -24,6 +24,7 @@ class User(Base):
     # 智能问数相关关系
     chat_sessions = relationship("ChatSession", foreign_keys="ChatSession.user_id", cascade="all, delete-orphan")
     dashboards = relationship("Dashboard", foreign_keys="Dashboard.user_id", cascade="all, delete-orphan")
+    probe_tasks = relationship("ProbeTask", foreign_keys="ProbeTask.user_id", cascade="all, delete-orphan")
 
 
 class DatabaseConfig(Base):
@@ -50,6 +51,7 @@ class DatabaseConfig(Base):
     # 关系
     user = relationship("User", back_populates="database_configs")
     interface_configs = relationship("InterfaceConfig", back_populates="database_config", cascade="all, delete-orphan")
+    probe_tasks = relationship("ProbeTask", foreign_keys="ProbeTask.database_config_id", cascade="all, delete-orphan")
 
 
 class InterfaceConfig(Base):
@@ -342,4 +344,134 @@ class DashboardWidget(Base):
     
     # 关系
     dashboard = relationship("Dashboard", back_populates="widgets")
+
+
+# ==================== 数据连接探查功能相关模型 ====================
+
+class ProbeTask(Base):
+    """探查任务模型"""
+    __tablename__ = "probe_tasks"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, comment="用户ID")
+    database_config_id = Column(Integer, ForeignKey("database_configs.id", ondelete="CASCADE"), nullable=False, comment="数据源配置ID")
+    task_name = Column(String(200), nullable=False, comment="任务名称")
+    probe_mode = Column(String(20), default="basic", nullable=False, comment="探查方式：basic/advanced")
+    probe_level = Column(String(20), default="database", nullable=False, comment="探查级别：database/table/column")
+    scheduling_type = Column(String(20), default="manual", nullable=False, comment="调度类型：manual/cron")
+    status = Column(String(20), default="pending", nullable=False, comment="状态：pending/running/completed/failed/stopped")
+    progress = Column(Integer, default=0, comment="进度（0-100）")
+    start_time = Column(DateTime(timezone=True), nullable=True, comment="开始时间")
+    end_time = Column(DateTime(timezone=True), nullable=True, comment="结束时间")
+    last_probe_time = Column(DateTime(timezone=True), nullable=True, comment="上次探查时间")
+    error_message = Column(Text, nullable=True, comment="错误信息")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
+    
+    # 关系
+    user = relationship("User", foreign_keys=[user_id])
+    database_config = relationship("DatabaseConfig", foreign_keys=[database_config_id])
+    database_results = relationship("ProbeDatabaseResult", back_populates="task", cascade="all, delete-orphan")
+    table_results = relationship("ProbeTableResult", back_populates="task", cascade="all, delete-orphan")
+    column_results = relationship("ProbeColumnResult", back_populates="task", cascade="all, delete-orphan")
+
+
+class ProbeDatabaseResult(Base):
+    """库级探查结果模型"""
+    __tablename__ = "probe_database_results"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("probe_tasks.id", ondelete="CASCADE"), nullable=False, comment="任务ID")
+    database_name = Column(String(200), nullable=False, comment="数据库名")
+    db_type = Column(String(50), nullable=False, comment="数据库类型")
+    total_size_mb = Column(String(50), nullable=True, comment="总大小（MB）")
+    growth_rate = Column(String(50), nullable=True, comment="增长速率")
+    table_count = Column(Integer, default=0, comment="表数量")
+    view_count = Column(Integer, default=0, comment="视图数量")
+    function_count = Column(Integer, default=0, comment="函数数量")
+    procedure_count = Column(Integer, default=0, comment="存储过程数量")
+    trigger_count = Column(Integer, default=0, comment="触发器数量")
+    event_count = Column(Integer, default=0, comment="事件数量（MySQL）")
+    sequence_count = Column(Integer, default=0, comment="序列数量（PostgreSQL）")
+    top_n_tables = Column(JSON, nullable=True, comment="TOP N大表（JSON格式）")
+    cold_tables = Column(JSON, nullable=True, comment="冷表列表（JSON格式）")
+    hot_tables = Column(JSON, nullable=True, comment="热表列表（JSON格式）")
+    high_risk_accounts = Column(JSON, nullable=True, comment="高危账号列表（JSON格式）")
+    permission_summary = Column(JSON, nullable=True, comment="权限摘要（JSON格式）")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
+    
+    # 关系
+    task = relationship("ProbeTask", back_populates="database_results")
+
+
+class ProbeTableResult(Base):
+    """表级探查结果模型"""
+    __tablename__ = "probe_table_results"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("probe_tasks.id", ondelete="CASCADE"), nullable=False, comment="任务ID")
+    database_name = Column(String(200), nullable=False, comment="数据库名")
+    table_name = Column(String(200), nullable=False, comment="表名")
+    schema_name = Column(String(200), nullable=True, comment="Schema名（PostgreSQL）")
+    row_count = Column(Integer, nullable=True, comment="行数")
+    table_size_mb = Column(String(50), nullable=True, comment="表大小（MB）")
+    index_size_mb = Column(String(50), nullable=True, comment="索引大小（MB）")
+    avg_row_length = Column(String(50), nullable=True, comment="平均行长度")
+    fragmentation_rate = Column(String(50), nullable=True, comment="碎片率")
+    auto_increment_usage = Column(JSON, nullable=True, comment="自增ID使用率（JSON格式）")
+    column_count = Column(Integer, default=0, comment="字段数")
+    comment = Column(Text, nullable=True, comment="表注释")
+    primary_key = Column(JSON, nullable=True, comment="主键（JSON格式）")
+    indexes = Column(JSON, nullable=True, comment="索引信息（JSON格式）")
+    foreign_keys = Column(JSON, nullable=True, comment="外键信息（JSON格式）")
+    constraints = Column(JSON, nullable=True, comment="约束信息（JSON格式）")
+    partition_info = Column(JSON, nullable=True, comment="分区信息（JSON格式，如果是分区表）")
+    is_cold_table = Column(Boolean, default=False, comment="是否冷表")
+    is_hot_table = Column(Boolean, default=False, comment="是否热表")
+    last_access_time = Column(DateTime(timezone=True), nullable=True, comment="最后访问时间")
+    is_hidden = Column(Boolean, default=False, comment="是否屏蔽")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
+    
+    # 关系
+    task = relationship("ProbeTask", back_populates="table_results")
+    column_results = relationship("ProbeColumnResult", back_populates="table_result", cascade="all, delete-orphan")
+
+
+class ProbeColumnResult(Base):
+    """列级探查结果模型"""
+    __tablename__ = "probe_column_results"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("probe_tasks.id", ondelete="CASCADE"), nullable=False, comment="任务ID")
+    table_result_id = Column(Integer, ForeignKey("probe_table_results.id", ondelete="CASCADE"), nullable=True, comment="表结果ID")
+    database_name = Column(String(200), nullable=False, comment="数据库名")
+    table_name = Column(String(200), nullable=False, comment="表名")
+    column_name = Column(String(200), nullable=False, comment="字段名")
+    data_type = Column(String(100), nullable=False, comment="数据类型")
+    nullable = Column(Boolean, default=True, comment="是否可空")
+    default_value = Column(Text, nullable=True, comment="默认值")
+    comment = Column(Text, nullable=True, comment="注释")
+    non_null_rate = Column(String(50), nullable=True, comment="非空率")
+    distinct_count = Column(Integer, nullable=True, comment="唯一值个数")
+    duplicate_rate = Column(String(50), nullable=True, comment="重复率")
+    max_length = Column(Integer, nullable=True, comment="最大长度（字符串类型）")
+    min_length = Column(Integer, nullable=True, comment="最小长度（字符串类型）")
+    avg_length = Column(String(50), nullable=True, comment="平均长度（字符串类型）")
+    max_value = Column(String(200), nullable=True, comment="最大值（数值/日期类型）")
+    min_value = Column(String(200), nullable=True, comment="最小值（数值/日期类型）")
+    top_values = Column(JSON, nullable=True, comment="Top 20高频值（JSON格式）")
+    low_frequency_values = Column(JSON, nullable=True, comment="低频长尾值（JSON格式）")
+    enum_values = Column(JSON, nullable=True, comment="枚举值清单（JSON格式）")
+    zero_count = Column(Integer, nullable=True, comment="零值数量（数值类型）")
+    negative_count = Column(Integer, nullable=True, comment="负值数量（数值类型）")
+    percentiles = Column(JSON, nullable=True, comment="分位数（P25/P50/P75/P95/P99，JSON格式）")
+    date_range = Column(JSON, nullable=True, comment="日期范围（JSON格式，日期类型）")
+    missing_rate = Column(String(50), nullable=True, comment="缺失率")
+    data_quality_issues = Column(JSON, nullable=True, comment="数据质量问题（JSON格式）")
+    sensitive_info = Column(JSON, nullable=True, comment="敏感信息标识（JSON格式）")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
+    
+    # 关系
+    task = relationship("ProbeTask", back_populates="column_results")
+    table_result = relationship("ProbeTableResult", back_populates="column_results")
 

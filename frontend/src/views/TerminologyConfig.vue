@@ -91,31 +91,31 @@
         class="config-table"
         v-loading="loading"
         stripe
-        :header-cell-style="{ background: '#f5f7fa', color: '#606266', fontWeight: '600' }"
+        :header-cell-style="{ background: '#f5f7fa', color: '#606266', fontWeight: '600', textAlign: 'center' }"
       >
-        <el-table-column prop="business_term" label="业务术语" min-width="180" />
-        <el-table-column prop="db_field" label="数据库字段" min-width="180" />
-        <el-table-column prop="table_name" label="所属表" width="150" />
-        <el-table-column prop="category" label="分类" width="120">
+        <el-table-column prop="business_term" label="业务术语" min-width="180" align="center" show-overflow-tooltip />
+        <el-table-column prop="db_field" label="数据库字段" min-width="180" align="center" show-overflow-tooltip />
+        <el-table-column prop="table_name" label="所属表" width="150" align="center" />
+        <el-table-column prop="category" label="分类" width="120" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.category" size="small">{{ row.category }}</el-tag>
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column prop="description" label="说明" min-width="200" show-overflow-tooltip />
-        <el-table-column prop="created_at" label="创建时间" width="180" sortable>
+        <el-table-column prop="description" label="说明" min-width="200" align="center" show-overflow-tooltip />
+        <el-table-column prop="created_at" label="创建时间" width="160" align="center" sortable>
           <template #default="{ row }">
             {{ formatDateTime(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column prop="updated_at" label="更新时间" width="180" sortable>
+        <el-table-column prop="updated_at" label="更新时间" width="160" align="center" sortable>
           <template #default="{ row }">
             {{ formatDateTime(row.updated_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="200" fixed="right" align="center">
           <template #default="{ row }">
-            <div class="action-buttons">
+            <div class="action-buttons" style="display: flex; gap: 4px; justify-content: center; flex-wrap: nowrap;">
               <el-button size="small" type="primary" @click="handleEdit(row)" class="btn-edit">
                 <el-icon><Edit /></el-icon>
                 编辑
@@ -130,7 +130,7 @@
       </el-table>
       
       <!-- 分页 -->
-      <div v-if="pagination.total > 0" class="pagination-container">
+      <div v-if="terminologies.length > 0 || pagination.total > 0" style="margin-top: 20px; display: flex; justify-content: flex-end;">
         <el-pagination
           v-model:current-page="pagination.page"
           v-model:page-size="pagination.page_size"

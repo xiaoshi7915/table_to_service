@@ -37,58 +37,60 @@
         class="interface-table"
         border 
         stripe 
-        :header-cell-style="{ background: '#f5f7fa', color: '#606266', fontWeight: '600' }"
+        :header-cell-style="{ background: '#f5f7fa', color: '#606266', fontWeight: '600', textAlign: 'center' }"
       >
-        <el-table-column prop="interface_name" label="接口名称" width="200" />
-        <el-table-column prop="database_name" label="数据库" width="150" />
-        <el-table-column prop="http_method" label="请求方式" width="100">
+        <el-table-column prop="interface_name" label="接口名称" width="200" align="center" show-overflow-tooltip />
+        <el-table-column prop="database_name" label="数据库" width="150" align="center" />
+        <el-table-column prop="http_method" label="请求方式" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="getMethodType(row.http_method)">
               {{ row.http_method }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="proxy_path" label="接口路径" show-overflow-tooltip />
-        <el-table-column prop="status" label="状态" width="100">
+        <el-table-column prop="proxy_path" label="接口路径" min-width="200" align="center" show-overflow-tooltip />
+        <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="row.status === 'active' ? 'success' : row.status === 'draft' ? 'info' : 'danger'">
               {{ row.status === 'active' ? '激活' : row.status === 'draft' ? '草稿' : '禁用' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="entry_mode" label="录入模式" width="100">
+        <el-table-column prop="entry_mode" label="录入模式" width="120" align="center">
           <template #default="{ row }">
             <el-tag :type="row.entry_mode === 'expert' ? 'warning' : row.entry_mode === 'query' ? 'info' : 'success'">
               {{ row.entry_mode === 'expert' ? '专家模式' : row.entry_mode === 'query' ? '问数模式' : '图形模式' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="创建时间" width="180">
+        <el-table-column prop="created_at" label="创建时间" width="160" align="center">
           <template #default="{ row }">
             {{ row.created_at ? new Date(row.created_at).toLocaleString('zh-CN') : '-' }}
           </template>
         </el-table-column>
-        <el-table-column prop="updated_at" label="修改时间" width="180">
+        <el-table-column prop="updated_at" label="修改时间" width="160" align="center">
           <template #default="{ row }">
             {{ row.updated_at ? new Date(row.updated_at).toLocaleString('zh-CN') : '-' }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="240" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button size="small" type="primary" @click="viewDoc(row.id)">
-              <el-icon><View /></el-icon>
-              查看文档
-            </el-button>
-            <el-button size="small" type="success" @click="exportSingleDoc(row.id, 'markdown')">
-              <el-icon><Download /></el-icon>
-              导出
-            </el-button>
+            <div style="display: flex; gap: 4px; justify-content: center; flex-wrap: nowrap;">
+              <el-button size="small" type="primary" @click="viewDoc(row.id)">
+                <el-icon><View /></el-icon>
+                查看文档
+              </el-button>
+              <el-button size="small" type="success" @click="exportSingleDoc(row.id, 'markdown')">
+                <el-icon><Download /></el-icon>
+                导出
+              </el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
       
       <!-- 分页 -->
-      <div class="pagination-container" style="margin-top: 20px; text-align: right;">
+      <div v-if="interfaceList.length > 0 || pagination.total > 0" style="margin-top: 20px; display: flex; justify-content: flex-end;">
         <el-pagination
           v-model:current-page="pagination.currentPage"
           v-model:page-size="pagination.pageSize"

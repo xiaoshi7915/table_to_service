@@ -29,20 +29,20 @@
         class="config-table"
         v-loading="loading"
         stripe
-        :header-cell-style="{ background: '#f5f7fa', color: '#606266', fontWeight: '600' }"
+        :header-cell-style="{ background: '#f5f7fa', color: '#606266', fontWeight: '600', textAlign: 'center' }"
       >
-        <el-table-column prop="name" label="模型名称" min-width="180" />
-        <el-table-column prop="provider" label="提供商" width="120">
+        <el-table-column prop="name" label="模型名称" min-width="180" align="center" show-overflow-tooltip />
+        <el-table-column prop="provider" label="提供商" width="120" align="center">
           <template #default="{ row }">
             <el-tag :type="getProviderTagType(row.provider)">
               {{ getProviderLabel(row.provider) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="model_name" label="模型标识" min-width="200" />
-        <el-table-column prop="max_tokens" label="最大Token" width="120" />
-        <el-table-column prop="temperature" label="温度参数" width="120" />
-        <el-table-column prop="scene" label="场景" width="120">
+        <el-table-column prop="model_name" label="模型标识" min-width="200" align="center" show-overflow-tooltip />
+        <el-table-column prop="max_tokens" label="最大Token" width="120" align="center" />
+        <el-table-column prop="temperature" label="温度参数" width="120" align="center" />
+        <el-table-column prop="scene" label="场景" width="120" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.scene" type="info" size="small">
               {{ getSceneLabel(row.scene) }}
@@ -50,32 +50,32 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="100">
+        <el-table-column label="状态" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="row.is_active ? 'success' : 'info'">
               {{ row.is_active ? '启用' : '禁用' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="默认" width="80">
+        <el-table-column label="默认" width="80" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.is_default" type="warning" size="small">默认</el-tag>
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="创建时间" width="180" sortable>
+        <el-table-column prop="created_at" label="创建时间" width="160" align="center" sortable>
           <template #default="{ row }">
             {{ formatDateTime(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column prop="updated_at" label="更新时间" width="180" sortable>
+        <el-table-column prop="updated_at" label="更新时间" width="160" align="center" sortable>
           <template #default="{ row }">
             {{ formatDateTime(row.updated_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="380" fixed="right">
+        <el-table-column label="操作" width="420" fixed="right" align="center">
           <template #default="{ row }">
-            <div class="action-buttons">
+            <div class="action-buttons" style="display: flex; gap: 4px; justify-content: center; flex-wrap: nowrap;">
               <el-button 
                 v-if="row.is_active" 
                 size="small" 
@@ -117,7 +117,7 @@
       </el-table>
       
       <!-- 分页 -->
-      <div v-if="models.length > 0 || pagination.total > 0" class="pagination-container">
+      <div v-if="models.length > 0 || pagination.total > 0" style="margin-top: 20px; display: flex; justify-content: flex-end;">
         <el-pagination
           v-model:current-page="pagination.page"
           v-model:page-size="pagination.page_size"

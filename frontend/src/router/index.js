@@ -88,6 +88,16 @@ const routes = [
         path: 'dashboard-edit/:id?',
         name: 'DashboardEdit',
         component: () => import('@/views/DashboardEdit.vue')
+      },
+      {
+        path: 'data-probe',
+        name: 'DataProbe',
+        component: () => import('@/views/DataProbe.vue')
+      },
+      {
+        path: 'probe-result/:id',
+        name: 'ProbeResult',
+        component: () => import('@/views/ProbeResult.vue')
       }
     ]
   }

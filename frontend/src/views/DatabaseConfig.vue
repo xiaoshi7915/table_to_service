@@ -35,51 +35,64 @@
         class="config-table"
         v-loading="loading"
         stripe
-        :header-cell-style="{ background: '#f5f7fa', color: '#606266', fontWeight: '600' }"
+        :header-cell-style="{ background: '#f5f7fa', color: '#606266', fontWeight: '600', textAlign: 'center' }"
       >
-        <el-table-column prop="name" label="配置名称" width="150" />
-        <el-table-column prop="db_type" label="数据库类型" width="120">
+        <el-table-column prop="name" label="配置名称" width="140" align="center" />
+        <el-table-column prop="db_type" label="数据库类型" width="120" align="center">
           <template #default="{ row }">
             <el-tag :type="getDbTypeTagType(row.db_type)">
               {{ getDbTypeLabel(row.db_type) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="host" label="主机" />
-        <el-table-column prop="port" label="端口" width="80" />
-        <el-table-column prop="database" label="数据库" />
-        <el-table-column prop="username" label="用户名" />
-        <el-table-column label="状态" width="100">
+        <el-table-column prop="host" label="主机" min-width="200" align="center" show-overflow-tooltip />
+        <el-table-column prop="port" label="端口" width="80" align="center" />
+        <el-table-column prop="database" label="数据库" min-width="120" align="center" show-overflow-tooltip />
+        <el-table-column prop="username" label="用户名" min-width="120" align="center" show-overflow-tooltip />
+        <el-table-column label="状态" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="row.is_active ? 'success' : 'info'">
               {{ row.is_active ? '已激活' : '未激活' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="创建时间" width="180">
+        <el-table-column prop="created_at" label="创建时间" width="160" align="center">
           <template #default="{ row }">
             {{ formatDateTime(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column prop="updated_at" label="更新时间" width="180">
+        <el-table-column prop="updated_at" label="更新时间" width="160" align="center">
           <template #default="{ row }">
             {{ formatDateTime(row.updated_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="280" fixed="right">
+        <el-table-column label="操作" width="520" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button size="small" @click="handleTest(row)" :loading="row.testing">
-              测试
-            </el-button>
-            <el-button size="small" type="primary" @click="handleEdit(row)">
-              编辑
-            </el-button>
-            <el-button size="small" type="success" @click="handleCopy(row)">
-              复制
-            </el-button>
-            <el-button size="small" type="danger" @click="handleDelete(row)">
-              删除
-            </el-button>
+            <div style="display: flex; gap: 4px; justify-content: center; flex-wrap: nowrap;">
+              <el-button size="small" @click="handleTest(row)" :loading="row.testing">
+                测试
+              </el-button>
+              <el-button size="small" type="primary" @click="handleEdit(row)">
+                编辑
+              </el-button>
+              <el-button size="small" type="success" @click="handleCopy(row)">
+                复制
+              </el-button>
+              <el-button 
+                size="small" 
+                type="info" 
+                @click="handleViewProbeResult(row)"
+                :disabled="!row.canViewProbeResult"
+              >
+                探查结果
+              </el-button>
+              <el-button size="small" type="warning" @click="handleStartProbe(row)" :loading="row.probeStarting">
+                启动探查
+              </el-button>
+              <el-button size="small" type="danger" @click="handleDelete(row)">
+                删除
+              </el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -194,14 +207,82 @@
         </el-button>
       </template>
     </el-dialog>
+    
+    <!-- 启动探查对话框 -->
+    <el-dialog
+      v-model="probeDialogVisible"
+      title="启动数据连接探查任务"
+      width="500px"
+    >
+      <div style="margin-bottom: 20px;">
+        <el-icon style="color: #E6A23C; font-size: 20px;"><QuestionFilled /></el-icon>
+        <span style="margin-left: 10px;">是否启动以下1个探查任务</span>
+      </div>
+      
+      <div style="margin-left: 30px; margin-bottom: 20px;">
+        <div v-if="currentProbeConfig">
+          {{ currentProbeConfig.name }}
+        </div>
+      </div>
+      
+      <el-form :model="probeForm" label-width="100px">
+        <el-form-item label="探查方式" required>
+          <el-radio-group v-model="probeForm.probe_mode">
+            <el-radio label="basic">基础探查</el-radio>
+            <el-radio label="advanced">高级探查</el-radio>
+          </el-radio-group>
+          <el-tooltip content="基础探查仅探查表结构，高级探查可以对表数据和表结构进行分析">
+            <el-icon style="margin-left: 5px; cursor: help;"><QuestionFilled /></el-icon>
+          </el-tooltip>
+        </el-form-item>
+        
+        <el-form-item label="探查级别" required>
+          <el-checkbox-group v-model="probeForm.probe_levels">
+            <el-checkbox label="database">库级</el-checkbox>
+            <el-checkbox label="table">表级</el-checkbox>
+            <el-checkbox label="column">字段级</el-checkbox>
+          </el-checkbox-group>
+          <el-tooltip content="可以同时选择多个探查级别，只探查勾选的级别">
+            <el-icon style="margin-left: 5px; cursor: help;"><QuestionFilled /></el-icon>
+          </el-tooltip>
+        </el-form-item>
+      </el-form>
+      
+      <template #footer>
+        <el-button @click="probeDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmStartProbe">确定</el-button>
+      </template>
+    </el-dialog>
+    
+    <!-- 探查结果详情弹框 -->
+    <el-dialog
+      v-model="probeResultDialogVisible"
+      title="探查结果详情"
+      width="90%"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <ProbeResultDialog 
+        v-if="probeResultDialogVisible && currentProbeTask"
+        :task-id="currentProbeTask.id"
+        :task-name="currentProbeTask.task_name || currentProbeConfig?.name"
+        :database-config-id="currentProbeConfig?.id"
+        :probe-mode="currentProbeTask.probe_mode"
+      />
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Connection, Refresh } from '@element-plus/icons-vue'
+import { Plus, Connection, Refresh, QuestionFilled } from '@element-plus/icons-vue'
 import api from '@/api'
+import probeApi from '@/api/probe'
+import ProbeResultDialog from '@/views/ProbeResultDialog.vue'
+
+const router = useRouter()
 
 const configs = ref([])
 const loading = ref(false)
@@ -210,6 +291,16 @@ const dialogTitle = ref('添加配置')
 const submitting = ref(false)
 const testing = ref(false)
 const formRef = ref(null)
+
+// 探查相关
+const probeDialogVisible = ref(false)
+const probeResultDialogVisible = ref(false)
+const currentProbeConfig = ref(null)
+const currentProbeTask = ref(null)
+const probeForm = ref({
+  probe_mode: 'basic',
+  probe_levels: ['database']
+})
 
 const form = reactive({
   id: null,
@@ -353,10 +444,56 @@ const loadConfigs = async () => {
       }
     })
     if (response.data.success) {
-      configs.value = (response.data.data || []).map(config => ({
-        ...config,
-        testing: false
-      }))
+      // 为每个配置加载探查任务状态（串行加载以避免并发过多导致超时）
+      const configsList = response.data.data || []
+      const configsWithProbeStatus = []
+      
+      for (const config of configsList) {
+        try {
+          // 设置5秒超时（给后端查询足够的时间）
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('timeout')), 5000)
+          )
+          const probeResponse = await Promise.race([
+            probeApi.getTaskByDatabaseConfig(config.id),
+                  timeoutPromise
+                ])
+                if (probeResponse.success && probeResponse.data) {
+            const task = probeResponse.data
+            // 只有任务已完成且有结果时才能查看
+            const canViewProbeResult = task.status === 'completed' && task.has_results === true
+            configsWithProbeStatus.push({
+              ...config,
+              testing: false,
+              probeStarting: false,
+              probeTask: task,
+              canViewProbeResult
+            })
+          } else {
+            configsWithProbeStatus.push({
+              ...config,
+              testing: false,
+              probeStarting: false,
+              probeTask: null,
+              canViewProbeResult: false
+            })
+          }
+        } catch (error) {
+          // 如果超时或没有探查任务，返回默认值
+          console.warn(`加载配置 ${config.id} 的探查状态失败:`, error.message)
+          configsWithProbeStatus.push({
+            ...config,
+            testing: false,
+            probeStarting: false,
+            probeTask: null,
+            canViewProbeResult: false
+          })
+        }
+      }
+      
+      // 使用nextTick确保在正确的渲染周期内更新，避免slot警告
+      await nextTick()
+      configs.value = configsWithProbeStatus
       // 更新分页信息
       if (response.data.pagination) {
         pagination.value.total = response.data.pagination.total || 0
@@ -538,6 +675,138 @@ const handleTestConnection = async () => {
     testing.value = false
     // 注意：密码在HTTP请求中会以明文传输（如果使用HTTPS则传输层加密）
     // 这是测试连接的必要行为，但请确保使用HTTPS协议
+  }
+}
+
+// 查看探查结果
+const handleViewProbeResult = async (row) => {
+  try {
+    // 获取或创建探查任务
+    const response = await probeApi.getTaskByDatabaseConfig(row.id)
+    if (response.success && response.data) {
+      currentProbeTask.value = response.data
+      currentProbeConfig.value = row
+      probeResultDialogVisible.value = true
+    } else {
+      ElMessage.error('获取探查任务失败')
+    }
+  } catch (error) {
+    ElMessage.error('获取探查任务失败：' + (error.message || '未知错误'))
+  }
+}
+
+// 验证表单
+const validateProbeForm = () => {
+  if (!probeForm.value.probe_mode) {
+    ElMessage.warning('请选择探查方式')
+    return false
+  }
+  if (!probeForm.value.probe_levels || probeForm.value.probe_levels.length === 0) {
+    ElMessage.warning('请至少选择一个探查级别')
+    return false
+  }
+  return true
+}
+
+// 启动探查
+const handleStartProbe = async (row) => {
+  if (row.probeStarting) return
+  
+  try {
+    // 获取或创建探查任务
+    const response = await probeApi.getTaskByDatabaseConfig(row.id)
+    if (response.success && response.data) {
+      const task = response.data
+      
+      // 检查任务状态
+      if (task.status === 'running') {
+        ElMessage.warning('探查任务正在运行中')
+        return
+      }
+      
+      if (task.status === 'completed') {
+        // 已完成的任务，询问是否重新探查
+        try {
+          await ElMessageBox.confirm('该数据源已有探查结果，是否重新探查？', '提示', {
+            confirmButtonText: '重新探查',
+            cancelButtonText: '取消',
+            type: 'info'
+          })
+        } catch {
+          return
+        }
+      }
+      
+      currentProbeConfig.value = row
+      // 默认选择基础探查和库级
+      probeForm.value.probe_mode = task.probe_mode || 'basic'
+      probeForm.value.probe_levels = task.probe_level ? [task.probe_level] : ['database']
+      probeDialogVisible.value = true
+    } else {
+      ElMessage.error('获取探查任务失败')
+    }
+  } catch (error) {
+    ElMessage.error('获取探查任务失败：' + (error.message || '未知错误'))
+  }
+}
+
+// 确认启动探查
+const confirmStartProbe = async () => {
+  if (!currentProbeConfig.value) return
+  
+  // 验证表单
+  if (!validateProbeForm()) {
+    return
+  }
+  
+  const row = currentProbeConfig.value
+  row.probeStarting = true
+  
+  try {
+    // 为每个探查级别创建/更新并启动任务
+    let successCount = 0
+    const errors = []
+    
+    for (const probe_level of probeForm.value.probe_levels) {
+      try {
+        // 为每个级别获取或创建对应的任务
+        const response = await probeApi.getTaskByDatabaseConfig(
+          row.id, 
+          probeForm.value.probe_mode, 
+          probe_level
+        )
+        if (response.success && response.data) {
+          const task = response.data
+          
+          // 启动任务（增加超时时间，因为启动任务可能需要一些时间）
+          await probeApi.startTask(task.id, {
+            probe_mode: probeForm.value.probe_mode,
+            probe_level: probe_level,
+            scheduling_type: 'manual'
+          })
+          successCount++
+        }
+      } catch (error) {
+        console.error(`启动${probe_level}级别探查失败:`, error)
+        errors.push(`${probe_level}级别: ${error.response?.data?.detail || error.message || '未知错误'}`)
+      }
+    }
+    
+    if (successCount > 0) {
+      ElMessage.success(`已启动 ${successCount} 个探查任务`)
+      probeDialogVisible.value = false
+      currentProbeConfig.value = null
+      // 延迟刷新配置列表，给后端一些时间更新任务状态
+      setTimeout(async () => {
+        await loadConfigs()
+      }, 1000)
+    } else {
+      ElMessage.error('启动探查任务失败：' + (errors.length > 0 ? errors.join('; ') : '未知错误'))
+    }
+  } catch (error) {
+    ElMessage.error('启动探查任务失败：' + (error.message || '未知错误'))
+  } finally {
+    row.probeStarting = false
   }
 }
 

@@ -4,6 +4,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Body, Query
 from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional
+from datetime import datetime, date
 from app.core.database import get_local_db
 from app.models import User, DatabaseConfig
 from app.schemas import ResponseModel
@@ -708,6 +709,110 @@ async def list_tables(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取表列表失败: {str(e)}"
+        )
+
+
+@router.get("/{config_id}/tables/{table_name}/sample", response_model=ResponseModel)
+async def get_table_sample(
+    config_id: int,
+    table_name: str,
+    limit: int = Query(10, ge=1, le=100, description="返回行数"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_local_db)
+):
+    """获取表的示例数据"""
+    try:
+        config = db.query(DatabaseConfig).filter(
+            DatabaseConfig.id == config_id,
+            DatabaseConfig.user_id == current_user.id
+        ).first()
+        
+        if not config:
+            raise HTTPException(status_code=404, detail="数据库配置不存在")
+        
+        db_type = config.db_type or "mysql"
+        
+        try:
+            engine = DatabaseConnectionFactory.create_engine(config)
+            
+            with engine.connect() as conn:
+                # 使用探查适配器获取示例数据查询
+                from app.core.probe.database_adapters import (
+                    MySQLAdapter, PostgreSQLAdapter, SQLServerAdapter,
+                    OracleAdapter, SQLiteAdapter
+                )
+                
+                adapters = {
+                    "mysql": MySQLAdapter,
+                    "postgresql": PostgreSQLAdapter,
+                    "sqlserver": SQLServerAdapter,
+                    "oracle": OracleAdapter,
+                    "sqlite": SQLiteAdapter,
+                }
+                
+                adapter_class = adapters.get(db_type.lower())
+                if not adapter_class:
+                    raise HTTPException(status_code=400, detail=f"不支持的数据库类型: {db_type}")
+                
+                adapter = adapter_class()
+                
+                # 获取示例数据查询
+                if db_type == "postgresql":
+                    sample_query = adapter.get_sample_data_query(config.database, table_name, schema_name="public", limit=limit)
+                else:
+                    sample_query = adapter.get_sample_data_query(config.database, table_name, limit=limit)
+                
+                result = conn.execute(text(sample_query))
+                rows = result.fetchall()
+                
+                # 转换为字典列表
+                if rows:
+                    # 获取列名
+                    if hasattr(result, 'keys'):
+                        columns = list(result.keys())
+                    else:
+                        # 如果没有keys方法，使用索引
+                        columns = [f"column_{i}" for i in range(len(rows[0]))]
+                    
+                    sample_data = []
+                    for row in rows:
+                        row_dict = {}
+                        for i, col in enumerate(columns):
+                            value = row[i] if isinstance(row, (tuple, list)) else getattr(row, col, None)
+                            # 处理特殊类型
+                            if value is None:
+                                row_dict[col] = None
+                            elif isinstance(value, (datetime, date)):
+                                row_dict[col] = value.isoformat()
+                            else:
+                                row_dict[col] = str(value)
+                        sample_data.append(row_dict)
+                    
+                    return ResponseModel(
+                        success=True,
+                        message="获取成功",
+                        data=sample_data
+                    )
+                else:
+                    return ResponseModel(
+                        success=True,
+                        message="表为空",
+                        data=[]
+                    )
+            
+        except Exception as e:
+            logger.error("获取示例数据失败: {}", e, exc_info=True)
+            raise HTTPException(
+                status_code=400,
+                detail=f"获取示例数据失败: {str(e)}"
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("获取示例数据失败: {}", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取示例数据失败: {str(e)}"
         )
 
 

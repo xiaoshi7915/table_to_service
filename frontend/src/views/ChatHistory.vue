@@ -81,10 +81,10 @@
         border
         stripe
         @selection-change="handleSelectionChange"
-        :header-cell-style="{ background: '#f5f7fa', color: '#606266', fontWeight: '600' }"
+        :header-cell-style="{ background: '#f5f7fa', color: '#606266', fontWeight: '600', textAlign: 'center' }"
       >
-        <el-table-column type="selection" width="55" />
-        <el-table-column prop="title" label="对话标题" min-width="200">
+        <el-table-column type="selection" width="55" align="center" />
+        <el-table-column prop="title" label="对话标题" min-width="200" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <div class="session-title-cell">
               <el-icon><ChatLineRound /></el-icon>
@@ -92,7 +92,7 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="data_source_name" label="数据源" width="150" />
+        <el-table-column prop="data_source_name" label="数据源" width="150" align="center" />
         <el-table-column prop="message_count" label="消息数" width="100" align="center" />
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
@@ -101,51 +101,53 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="创建时间" width="180">
+        <el-table-column prop="created_at" label="创建时间" width="160" align="center">
           <template #default="{ row }">
             {{ formatTime(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column prop="updated_at" label="更新时间" width="180">
+        <el-table-column prop="updated_at" label="更新时间" width="160" align="center">
           <template #default="{ row }">
             {{ formatTime(row.updated_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="280" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button
-              type="primary"
-              size="small"
-              text
-              @click="viewSession(row)"
-            >
-              <el-icon><View /></el-icon>
-              查看
-            </el-button>
-            <el-button
-              type="warning"
-              size="small"
-              text
-              @click="renameSession(row)"
-            >
-              <el-icon><Edit /></el-icon>
-              重命名
-            </el-button>
-            <el-button
-              type="danger"
-              size="small"
-              text
-              @click="deleteSession(row.id)"
-            >
-              <el-icon><Delete /></el-icon>
-              删除
-            </el-button>
+            <div style="display: flex; gap: 4px; justify-content: center; flex-wrap: nowrap;">
+              <el-button
+                type="primary"
+                size="small"
+                text
+                @click="viewSession(row)"
+              >
+                <el-icon><View /></el-icon>
+                查看
+              </el-button>
+              <el-button
+                type="warning"
+                size="small"
+                text
+                @click="renameSession(row)"
+              >
+                <el-icon><Edit /></el-icon>
+                重命名
+              </el-button>
+              <el-button
+                type="danger"
+                size="small"
+                text
+                @click="deleteSession(row.id)"
+              >
+                <el-icon><Delete /></el-icon>
+                删除
+              </el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
       
       <!-- 分页 -->
-      <div class="pagination-container">
+      <div v-if="sessions.length > 0 || total > 0" style="margin-top: 20px; display: flex; justify-content: flex-end;">
         <el-pagination
           v-model:current-page="pagination.page"
           v-model:page-size="pagination.page_size"

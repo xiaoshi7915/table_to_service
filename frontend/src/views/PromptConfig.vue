@@ -87,36 +87,36 @@
         class="config-table"
         v-loading="loading"
         stripe
-        :header-cell-style="{ background: '#f5f7fa', color: '#606266', fontWeight: '600' }"
+        :header-cell-style="{ background: '#f5f7fa', color: '#606266', fontWeight: '600', textAlign: 'center' }"
       >
-        <el-table-column prop="name" label="名称" min-width="200" />
-        <el-table-column prop="prompt_type" label="类型" width="150">
+        <el-table-column prop="name" label="名称" min-width="200" align="center" show-overflow-tooltip />
+        <el-table-column prop="prompt_type" label="类型" width="150" align="center">
           <template #default="{ row }">
             <el-tag size="small">{{ getPromptTypeName(row.prompt_type) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="priority" label="优先级" width="100" sortable />
-        <el-table-column prop="content" label="内容" min-width="300" show-overflow-tooltip />
-        <el-table-column label="状态" width="100">
+        <el-table-column prop="priority" label="优先级" width="100" align="center" sortable />
+        <el-table-column prop="content" label="内容" min-width="300" align="center" show-overflow-tooltip />
+        <el-table-column label="状态" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="row.is_active ? 'success' : 'info'">
               {{ row.is_active ? '启用' : '禁用' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="创建时间" width="180" sortable>
+        <el-table-column prop="created_at" label="创建时间" width="160" align="center" sortable>
           <template #default="{ row }">
             {{ formatDateTime(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column prop="updated_at" label="更新时间" width="180" sortable>
+        <el-table-column prop="updated_at" label="更新时间" width="160" align="center" sortable>
           <template #default="{ row }">
             {{ formatDateTime(row.updated_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="280" fixed="right">
+        <el-table-column label="操作" width="280" fixed="right" align="center">
           <template #default="{ row }">
-            <div class="action-buttons">
+            <div class="action-buttons" style="display: flex; gap: 4px; justify-content: center; flex-wrap: nowrap;">
               <el-button size="small" @click="handleView(row)" class="btn-view">
                 <el-icon><View /></el-icon>
                 查看
@@ -135,7 +135,7 @@
       </el-table>
       
       <!-- 分页 -->
-      <div v-if="pagination.total > 0" class="pagination-container">
+      <div v-if="prompts.length > 0 || pagination.total > 0" style="margin-top: 20px; display: flex; justify-content: flex-end;">
         <el-pagination
           v-model:current-page="pagination.page"
           v-model:page-size="pagination.page_size"
