@@ -170,14 +170,19 @@ async def create_config(
         password = config_data.get("password", "")
         encrypted_password = encrypt_password(password) if password else ""
         
+        # 清理输入数据（去除首尾空格）
+        host = config_data.get("host", "").strip() if config_data.get("host") else ""
+        database = config_data.get("database", "").strip() if config_data.get("database") else ""
+        username = config_data.get("username", "").strip() if config_data.get("username") else ""
+        
         config = DatabaseConfig(
             user_id=current_user.id,
             name=config_data.get("name"),
             db_type=config_data.get("db_type", "mysql"),  # 支持新字段，默认mysql
-            host=config_data.get("host"),
+            host=host,
             port=config_data.get("port", 3306),
-            database=config_data.get("database"),
-            username=config_data.get("username"),
+            database=database,
+            username=username,
             password=encrypted_password,  # 存储加密后的密码
             charset=config_data.get("charset", "utf8mb4"),
             extra_params=config_data.get("extra_params"),  # 支持新字段
@@ -225,6 +230,9 @@ async def update_config(
                 # 如果是密码字段，需要加密
                 if key == "password" and value:
                     setattr(config, key, encrypt_password(value))
+                # 清理 host、database、username 字段的首尾空格
+                elif key in ["host", "database", "username"] and value:
+                    setattr(config, key, value.strip() if isinstance(value, str) else value)
                 else:
                     setattr(config, key, value)
         
@@ -304,6 +312,10 @@ async def test_connection_direct(
                 raise HTTPException(status_code=400, detail="SQLite数据库文件路径不能为空")
         else:
             host = config_data.get("host")
+            # 清理 hostname 中的空格
+            if host:
+                host = host.strip()
+            
             port = config_data.get("port")
             database = config_data.get("database")
             username = config_data.get("username")
@@ -320,10 +332,10 @@ async def test_connection_direct(
         from app.models import DatabaseConfig
         temp_config = DatabaseConfig(
             db_type=db_type,
-            host=config_data.get("host", ""),
+            host=host if db_type != "sqlite" else "",
             port=port if db_type != "sqlite" else None,
             database=database,
-            username=config_data.get("username", ""),
+            username=config_data.get("username", "").strip() if config_data.get("username") else "",
             password=password,
             charset=config_data.get("charset", "utf8mb4"),
             extra_params=config_data.get("extra_params")

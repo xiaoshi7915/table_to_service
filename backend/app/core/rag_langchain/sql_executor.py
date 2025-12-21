@@ -140,12 +140,8 @@ class SQLExecutor:
             
             try:
                 # 参数化查询（防止SQL注入）
-                if params:
-                    # 使用参数化查询，返回SQL和参数字典
-                    formatted_sql, query_params = self._parameterize_sql(sql, params, adapter)
-                else:
-                    formatted_sql = sql
-                    query_params = {}
+                # 注意：即使params为空，也要检查SQL中是否有未绑定的参数占位符
+                formatted_sql, query_params = self._parameterize_sql(sql, params or {}, adapter)
                 
                 # 执行查询 - 使用SQLAlchemy的参数绑定机制
                 if query_params:
@@ -228,9 +224,14 @@ class SQLExecutor:
         """
         sql_upper = sql.upper().strip()
         
-        # 只允许SELECT语句
-        if not sql_upper.startswith("SELECT"):
+        # 只允许SELECT语句或WITH子句（CTE）开头的SELECT语句
+        # WITH子句格式：WITH ... AS (...) SELECT ...
+        if not (sql_upper.startswith("SELECT") or sql_upper.startswith("WITH")):
             raise ValueError("只允许执行SELECT查询语句")
+        
+        # 如果以WITH开头，必须包含SELECT
+        if sql_upper.startswith("WITH") and "SELECT" not in sql_upper:
+            raise ValueError("WITH子句必须包含SELECT语句")
         
         # 禁止危险操作（修改数据操作）
         # 使用正则表达式匹配单词边界，避免误判字段名（如created_at）
@@ -288,13 +289,66 @@ class SQLExecutor:
         Returns:
             (SQL语句, 参数字典) 元组，用于SQLAlchemy的参数化查询
         """
-        # 如果SQL已经包含参数占位符（:param_name），直接使用参数化查询
+        # 如果SQL已经包含参数占位符（:param_name），处理参数绑定
         if ':' in sql:
-            # 检查SQL中的占位符，只保留实际存在的参数
+            # 检查SQL中的占位符
             placeholder_pattern = r':(\w+)'
             placeholders_in_sql = re.findall(placeholder_pattern, sql)
-            # 只返回SQL中实际使用的参数
+            
+            # 只返回SQL中实际使用的参数（且params中提供了值）
             filtered_params = {k: v for k, v in params.items() if k in placeholders_in_sql}
+            
+            # 检查是否有未绑定的参数（SQL中有占位符但params中没有值）
+            unbound_params = set(placeholders_in_sql) - set(filtered_params.keys())
+            
+            if unbound_params:
+                # 移除未绑定的参数占位符，替换为合理的默认值或移除条件
+                logger.warning(f"检测到未绑定的SQL参数: {unbound_params}，将自动处理")
+                processed_sql = sql
+                
+                for param_name in unbound_params:
+                    # 根据参数在SQL中的使用方式，决定如何处理
+                    # 优先移除包含未绑定参数的条件
+                    
+                    # 模式1: WHERE column != :param_name 或 WHERE column = :param_name（包括在CTE中）
+                    # 匹配模式：column != :param_name 或 column = :param_name（可能前面有AND/OR）
+                    pattern_condition = rf'(?:\s+(?:AND|OR)\s+)?\w+\s*(?:!=|<>|=)\s*:{param_name}\b'
+                    
+                    # 先移除AND/OR连接的条件
+                    processed_sql = re.sub(
+                        rf'\s+(?:AND|OR)\s+\w+\s*(?:!=|<>|=)\s*:{param_name}\b',
+                        '',
+                        processed_sql,
+                        flags=re.IGNORECASE
+                    )
+                    
+                    # 处理WHERE子句中的第一个条件
+                    processed_sql = re.sub(
+                        rf'\bWHERE\s+\w+\s*(?:!=|<>|=)\s*:{param_name}\b',
+                        'WHERE 1=1',
+                        processed_sql,
+                        flags=re.IGNORECASE
+                    )
+                    
+                    # 处理HAVING子句中的条件
+                    processed_sql = re.sub(
+                        rf'\bHAVING\s+\w+\s*(?:!=|<>|=)\s*:{param_name}\b',
+                        'HAVING 1=1',
+                        processed_sql,
+                        flags=re.IGNORECASE
+                    )
+                    
+                    # 如果还有未处理的占位符，替换为NULL（保守处理）
+                    if f':{param_name}' in processed_sql:
+                        processed_sql = processed_sql.replace(f':{param_name}', 'NULL')
+                    
+                    # 清理可能的空WHERE/HAVING子句
+                    processed_sql = re.sub(r'\s+WHERE\s+1\s*=\s*1(?:\s+(?:AND|OR))?\s*$', '', processed_sql, flags=re.IGNORECASE)
+                    processed_sql = re.sub(r'\s+HAVING\s+1\s*=\s*1(?:\s+(?:AND|OR))?\s*$', '', processed_sql, flags=re.IGNORECASE)
+                
+                sql = processed_sql
+                logger.info(f"已处理未绑定参数，修改后的SQL预览: {sql[:200]}...")
+            
             return sql, filtered_params
         
         # 如果SQL中没有占位符，返回原始SQL和空参数字典

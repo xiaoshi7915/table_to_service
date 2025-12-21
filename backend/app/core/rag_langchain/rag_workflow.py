@@ -39,6 +39,7 @@ class RAGState(TypedDict):
     retrieved_contexts: Dict[str, List[Document]]  # 检索到的上下文
     merged_context: List[Document]  # 合并后的上下文
     prompt: str  # 构建的提示词
+    thinking_steps: List[Dict[str, Any]]  # 思考步骤记录
     
     # SQL生成和执行
     sql: str  # 生成的SQL
@@ -125,6 +126,15 @@ class RAGWorkflow:
         """并行加载Schema信息和检索上下文"""
         question = state["question"]
         
+        # 记录思考步骤
+        if "thinking_steps" not in state:
+            state["thinking_steps"] = []
+        state["thinking_steps"].append({
+            "step": "加载数据库Schema和检索相关知识",
+            "status": "进行中",
+            "message": "正在分析数据库表结构和检索相关术语、SQL示例..."
+        })
+        
         def load_schema():
             """加载Schema信息（同步函数）"""
             try:
@@ -145,34 +155,55 @@ class RAGWorkflow:
         def retrieve_terminologies():
             """检索术语"""
             try:
+                if self.terminology_retriever is None:
+                    logger.debug("术语检索器未初始化，跳过检索")
+                    return []
                 if hasattr(self.terminology_retriever, 'get_relevant_documents'):
-                    return self.terminology_retriever.get_relevant_documents(question)
+                    docs = self.terminology_retriever.get_relevant_documents(question)
+                    logger.debug(f"术语检索返回 {len(docs)} 个文档")
+                    return docs
                 else:
-                    return self.terminology_retriever._get_relevant_documents(question)
+                    docs = self.terminology_retriever._get_relevant_documents(question)
+                    logger.debug(f"术语检索返回 {len(docs)} 个文档")
+                    return docs
             except Exception as e:
-                logger.warning(f"检索术语失败: {e}")
+                logger.warning(f"检索术语失败: {e}", exc_info=True)
                 return []
         
         def retrieve_sql_examples():
             """检索SQL示例"""
             try:
+                if self.sql_example_retriever is None:
+                    logger.debug("SQL示例检索器未初始化，跳过检索")
+                    return []
                 if hasattr(self.sql_example_retriever, 'get_relevant_documents'):
-                    return self.sql_example_retriever.get_relevant_documents(question)
+                    docs = self.sql_example_retriever.get_relevant_documents(question)
+                    logger.debug(f"SQL示例检索返回 {len(docs)} 个文档")
+                    return docs
                 else:
-                    return self.sql_example_retriever._get_relevant_documents(question)
+                    docs = self.sql_example_retriever._get_relevant_documents(question)
+                    logger.debug(f"SQL示例检索返回 {len(docs)} 个文档")
+                    return docs
             except Exception as e:
-                logger.warning(f"检索SQL示例失败: {e}")
+                logger.warning(f"检索SQL示例失败: {e}", exc_info=True)
                 return []
         
         def retrieve_knowledge():
             """检索业务知识"""
             try:
+                if self.knowledge_retriever is None:
+                    logger.debug("知识库检索器未初始化，跳过检索")
+                    return []
                 if hasattr(self.knowledge_retriever, 'get_relevant_documents'):
-                    return self.knowledge_retriever.get_relevant_documents(question)
+                    docs = self.knowledge_retriever.get_relevant_documents(question)
+                    logger.debug(f"知识库检索返回 {len(docs)} 个文档")
+                    return docs
                 else:
-                    return self.knowledge_retriever._get_relevant_documents(question)
+                    docs = self.knowledge_retriever._get_relevant_documents(question)
+                    logger.debug(f"知识库检索返回 {len(docs)} 个文档")
+                    return docs
             except Exception as e:
-                logger.warning(f"检索业务知识失败: {e}")
+                logger.warning(f"检索业务知识失败: {e}", exc_info=True)
                 return []
         
         # 并行执行所有操作
@@ -200,6 +231,10 @@ class RAGWorkflow:
             
             logger.info(f"并行加载完成：Schema包含 {len(schema_info['tables'])} 个表，"
                        f"检索到 {len(terminologies)} 个术语，{len(sql_examples)} 个SQL示例，{len(knowledge)} 个知识条目")
+            
+            # 更新思考步骤
+            state["thinking_steps"][-1]["status"] = "完成"
+            state["thinking_steps"][-1]["message"] = f"已加载 {len(schema_info['tables'])} 个表结构，检索到 {len(terminologies)} 个术语、{len(sql_examples)} 个SQL示例、{len(knowledge)} 个知识条目"
         except Exception as e:
             logger.error(f"并行加载失败: {e}", exc_info=True)
             # 降级到串行执行
@@ -209,6 +244,9 @@ class RAGWorkflow:
                 "sql_examples": retrieve_sql_examples(),
                 "knowledge": retrieve_knowledge()
             }
+            # 更新思考步骤
+            state["thinking_steps"][-1]["status"] = "完成"
+            state["thinking_steps"][-1]["message"] = "Schema加载完成（降级到串行模式）"
         
         return state
     
@@ -280,6 +318,23 @@ class RAGWorkflow:
     
     def _generate_sql(self, state: RAGState) -> RAGState:
         """生成SQL"""
+        # 记录思考步骤
+        if "thinking_steps" not in state:
+            state["thinking_steps"] = []
+        retry_count = state.get("retry_count", 0)
+        if retry_count > 0:
+            state["thinking_steps"].append({
+                "step": f"重新生成SQL（第{retry_count}次重试）",
+                "status": "进行中",
+                "message": "根据错误信息重新分析问题并生成SQL..."
+            })
+        else:
+            state["thinking_steps"].append({
+                "step": "生成SQL查询",
+                "status": "进行中",
+                "message": "基于数据库Schema和相关知识生成SQL语句..."
+            })
+        
         try:
             # 使用LLM生成SQL
             prompt = state["prompt"]
@@ -344,6 +399,10 @@ class RAGWorkflow:
                 
                 state["sql"] = sql
                 state["contains_complex_sql"] = False
+                
+                # 更新思考步骤
+                state["thinking_steps"][-1]["status"] = "完成"
+                state["thinking_steps"][-1]["message"] = f"SQL生成成功: {sql[:50]}..."
                 
                 logger.info(f"生成SQL: {sql[:100]}...")
             except Exception as e:
@@ -413,6 +472,15 @@ class RAGWorkflow:
     
     def _execute_sql(self, state: RAGState) -> RAGState:
         """执行SQL"""
+        # 记录思考步骤
+        if "thinking_steps" not in state:
+            state["thinking_steps"] = []
+        state["thinking_steps"].append({
+            "step": "执行SQL查询",
+            "status": "进行中",
+            "message": "正在执行SQL并获取查询结果..."
+        })
+        
         sql = state["sql"]
         db_config = state["db_config"]
         
@@ -425,6 +493,8 @@ class RAGWorkflow:
                 "sql": sql
             }
             state["final_sql"] = sql
+            state["thinking_steps"][-1]["status"] = "跳过"
+            state["thinking_steps"][-1]["message"] = "SQL包含复杂逻辑，需要手动处理"
             logger.info("SQL包含复杂逻辑（如CREATE语句），跳过执行，返回SQL给用户")
             return state
         
@@ -435,6 +505,8 @@ class RAGWorkflow:
                 "success": False,
                 "error": error_msg
             }
+            state["thinking_steps"][-1]["status"] = "失败"
+            state["thinking_steps"][-1]["message"] = error_msg
             # 增加重试计数，但不再重试（因为LLM调用失败）
             state["retry_count"] = state.get("retry_count", 0) + 1
             return state
@@ -473,6 +545,10 @@ class RAGWorkflow:
                     "success": False,
                     "error": error_msg
                 }
+                # 更新思考步骤
+                if "thinking_steps" in state and len(state["thinking_steps"]) > 0:
+                    state["thinking_steps"][-1]["status"] = "失败"
+                    state["thinking_steps"][-1]["message"] = f"SQL执行失败: {error_msg[:50]}..."
                 # 确保SQL被保存到final_sql，即使执行失败
                 if sql and not state.get("final_sql"):
                     state["final_sql"] = sql
@@ -709,9 +785,7 @@ class RAGWorkflow:
         if sql_upper.startswith('WITH'):
             return sql
         
-        
-        
-        # 检测模式：以括号包围的SELECT开头，后面跟着另一个SELECT
+        # 检测模式1：以括号包围的SELECT开头，后面跟着另一个SELECT
         if sql.strip().startswith('('):
             # 手动解析括号
             paren_count = 0
@@ -725,12 +799,9 @@ class RAGWorkflow:
                         cte_end = i + 1
                         break
             
-            
-            
             if cte_end > 0:
                 # 检查后面是否跟着SELECT
                 remaining = sql[cte_end:].strip()
-                
                 
                 if remaining.upper().startswith('SELECT'):
                     # 提取CTE部分
@@ -739,17 +810,62 @@ class RAGWorkflow:
                     # 从主查询中提取CTE名称
                     from_match = re.search(r'FROM\s+(\w+)', remaining, re.IGNORECASE)
                     
-                    
                     if from_match:
                         cte_name = from_match.group(1)
                         
                         # 重构SQL，添加WITH关键字
                         fixed_sql = f"WITH {cte_name} AS (\n    {cte_query}\n)\n{remaining}"
-                        logger.info(f"检测到缺少WITH关键字的CTE，已自动修复: {cte_name}")
-                        
-                        
-                        
+                        logger.info(f"检测到缺少WITH关键字的CTE（模式1），已自动修复: {cte_name}")
                         return fixed_sql
+        
+        # 检测模式2：以SELECT开头，后面跟着 `),` 和另一个CTE定义
+        # 模式：SELECT ... FROM ... [WHERE ...] [GROUP BY ...]\n),\ncte_name AS (\nSELECT ...
+        if sql_upper.startswith('SELECT'):
+            # 查找 `),\n` 或 `),\n` 后面跟着 `cte_name AS (`
+            # 这个模式表示有多个CTE，但缺少WITH关键字
+            # 匹配：SELECT ... [各种子句] ... ), cte_name AS (
+            pattern = r'^(SELECT\s+.*?)\s*\),\s*(\w+)\s+AS\s*\('
+            match = re.search(pattern, sql, re.IGNORECASE | re.DOTALL)
+            
+            if match:
+                # 找到第一个CTE的SELECT部分（到 `),` 之前）
+                first_cte_query = match.group(1).strip()
+                second_cte_name = match.group(2)
+                
+                # 查找第一个CTE的名称（从主查询的FROM子句中）
+                # 查找所有 `FROM table_name` 的模式，取最后一个（应该是主查询中的第一个CTE）
+                all_from_matches = list(re.finditer(r'FROM\s+(\w+)', sql, re.IGNORECASE))
+                if len(all_from_matches) >= 2:
+                    # 第一个FROM是第一个CTE中的，第二个FROM是第二个CTE中的
+                    # 第三个FROM是主查询中的，引用第一个CTE
+                    main_from_match = all_from_matches[-1]  # 最后一个FROM是主查询
+                    first_cte_name = main_from_match.group(1)
+                    
+                    # 提取第二个CTE及其后的主查询
+                    # 找到第二个CTE的开始位置（`AS (` 之后）
+                    second_cte_start = match.end()
+                    # 找到第二个CTE的结束位置（对应的右括号）
+                    paren_count = 1
+                    second_cte_end = second_cte_start
+                    for i in range(second_cte_start, len(sql)):
+                        if sql[i] == '(':
+                            paren_count += 1
+                        elif sql[i] == ')':
+                            paren_count -= 1
+                            if paren_count == 0:
+                                second_cte_end = i + 1
+                                break
+                    
+                    # 提取第二个CTE的内容
+                    second_cte_query = sql[second_cte_start:second_cte_end-1].strip()
+                    
+                    # 提取主查询（第二个CTE之后的部分）
+                    main_query = sql[second_cte_end:].strip()
+                    
+                    # 重构SQL，添加WITH关键字
+                    fixed_sql = f"WITH {first_cte_name} AS (\n    {first_cte_query}\n),\n{second_cte_name} AS (\n    {second_cte_query}\n)\n{main_query}"
+                    logger.info(f"检测到缺少WITH关键字的多个CTE（模式2），已自动修复: {first_cte_name}, {second_cte_name}")
+                    return fixed_sql
         
         return sql
     
@@ -822,6 +938,7 @@ class RAGWorkflow:
             retrieved_contexts={},
             merged_context=[],
             prompt="",
+            thinking_steps=[],
             sql="",
             sql_execution_result=None,
             execution_error=None,
@@ -849,12 +966,17 @@ class RAGWorkflow:
                     "explanation": result.get("explanation", ""),
                     "retry_count": result.get("retry_count", 0),
                     "error": result.get("execution_error"),
-                    "contains_complex_sql": result.get("contains_complex_sql", False)  # 添加复杂SQL标记
+                    "contains_complex_sql": result.get("contains_complex_sql", False),  # 添加复杂SQL标记
+                    "thinking_steps": result.get("thinking_steps", [])  # 添加思考步骤
                 }
             
             # 确保返回contains_complex_sql字段和final_sql字段
             if "contains_complex_sql" not in final_result:
                 final_result["contains_complex_sql"] = result.get("contains_complex_sql", False)
+            
+            # 确保thinking_steps字段存在
+            if "thinking_steps" not in final_result:
+                final_result["thinking_steps"] = result.get("thinking_steps", [])
             
             # 确保final_sql字段存在（即使执行失败也要返回SQL）
             if "final_sql" not in final_result or not final_result.get("final_sql"):

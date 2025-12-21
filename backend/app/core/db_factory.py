@@ -82,15 +82,18 @@ class DatabaseConnectionFactory:
         encoded_username = quote_plus(db_config.username) if db_config.username else ""
         encoded_password = quote_plus(plain_password) if plain_password else ""
         
+        # 清理 hostname（去除首尾空格）
+        clean_host = db_config.host.strip() if db_config.host else ""
+        
         # 构建基础连接URL
         if db_type == "mysql":
             # MySQL: mysql+pymysql://user:pass@host:port/db?charset=utf8mb4
             charset = db_config.charset or "utf8mb4"
-            url = f"mysql+pymysql://{encoded_username}:{encoded_password}@{db_config.host}:{db_config.port}/{db_config.database}?charset={charset}"
+            url = f"mysql+pymysql://{encoded_username}:{encoded_password}@{clean_host}:{db_config.port}/{db_config.database}?charset={charset}"
             
         elif db_type == "postgresql":
             # PostgreSQL: postgresql+psycopg2://user:pass@host:port/db
-            url = f"postgresql+psycopg2://{encoded_username}:{encoded_password}@{db_config.host}:{db_config.port}/{db_config.database}"
+            url = f"postgresql+psycopg2://{encoded_username}:{encoded_password}@{clean_host}:{db_config.port}/{db_config.database}"
             
         elif db_type == "sqlserver":
             # SQL Server: mssql+pyodbc://user:pass@host:port/db?driver=ODBC+Driver+17+for+SQL+Server
@@ -99,7 +102,7 @@ class DatabaseConnectionFactory:
             if db_config.extra_params and isinstance(db_config.extra_params, dict):
                 driver = db_config.extra_params.get("driver", driver)
             encoded_driver = quote_plus(driver)
-            url = f"mssql+pyodbc://{encoded_username}:{encoded_password}@{db_config.host}:{db_config.port}/{db_config.database}?driver={encoded_driver}"
+            url = f"mssql+pyodbc://{encoded_username}:{encoded_password}@{clean_host}:{db_config.port}/{db_config.database}?driver={encoded_driver}"
             
         elif db_type == "oracle":
             # Oracle: oracle+cx_oracle://user:pass@host:port/?service_name=service
@@ -109,10 +112,10 @@ class DatabaseConnectionFactory:
                 if "service_name" in db_config.extra_params:
                     service_name = db_config.extra_params["service_name"]
                 elif "sid" in db_config.extra_params:
-                    url = f"oracle+cx_oracle://{encoded_username}:{encoded_password}@{db_config.host}:{db_config.port}/?sid={db_config.extra_params['sid']}"
+                    url = f"oracle+cx_oracle://{encoded_username}:{encoded_password}@{clean_host}:{db_config.port}/?sid={db_config.extra_params['sid']}"
                     return url
             
-            url = f"oracle+cx_oracle://{encoded_username}:{encoded_password}@{db_config.host}:{db_config.port}/?service_name={service_name}"
+            url = f"oracle+cx_oracle://{encoded_username}:{encoded_password}@{clean_host}:{db_config.port}/?service_name={service_name}"
             
         else:
             raise ValueError(f"未实现的数据库类型: {db_type}")

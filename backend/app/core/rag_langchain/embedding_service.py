@@ -2,8 +2,9 @@
 中文嵌入服务
 使用 bge-base-zh-v1.5 模型（BAAI General Embedding）
 """
-from typing import List
+from typing import List, Optional
 import os
+import threading
 try:
     # LangChain 1.x
     from langchain_huggingface import HuggingFaceEmbeddings
@@ -21,15 +22,20 @@ if not os.getenv("HF_ENDPOINT"):
     logger.info("设置 Hugging Face 镜像源: https://hf-mirror.com")
 
 
+# 全局嵌入服务实例（单例模式，避免重复加载模型）
+_embedding_service_instance: Optional['ChineseEmbeddingService'] = None
+_embedding_service_lock = threading.Lock()
+
 class ChineseEmbeddingService:
     """中文嵌入服务（使用bge-base-zh-v1.5）"""
     
-    def __init__(self, model_name: str = "BAAI/bge-base-zh-v1.5"):
+    def __init__(self, model_name: str = "BAAI/bge-base-zh-v1.5", force_reload: bool = False):
         """
-        初始化中文嵌入服务
+        初始化中文嵌入服务（单例模式，避免重复加载模型）
         
         Args:
             model_name: 模型名称，默认使用BAAI/bge-base-zh-v1.5
+            force_reload: 是否强制重新加载（默认False，使用单例）
         """
         self.model_name = model_name
         try:
@@ -45,6 +51,31 @@ class ChineseEmbeddingService:
         except Exception as e:
             logger.error(f"加载嵌入模型失败: {e}", exc_info=True)
             raise
+    
+    @classmethod
+    def get_instance(cls, model_name: str = "BAAI/bge-base-zh-v1.5", force_reload: bool = False) -> 'ChineseEmbeddingService':
+        """
+        获取嵌入服务单例实例（避免重复加载模型，提升性能）
+        
+        Args:
+            model_name: 模型名称
+            force_reload: 是否强制重新加载
+            
+        Returns:
+            嵌入服务实例
+        """
+        global _embedding_service_instance, _embedding_service_lock
+        
+        if force_reload or _embedding_service_instance is None:
+            if _embedding_service_lock:
+                with _embedding_service_lock:
+                    if force_reload or _embedding_service_instance is None:
+                        _embedding_service_instance = cls(model_name=model_name)
+            else:
+                if force_reload or _embedding_service_instance is None:
+                    _embedding_service_instance = cls(model_name=model_name)
+        
+        return _embedding_service_instance
     
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """

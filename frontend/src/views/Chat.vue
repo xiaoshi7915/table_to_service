@@ -64,19 +64,29 @@
           <div class="info-item" v-if="currentSession.selected_tables">
             <el-icon><Grid /></el-icon>
             <span class="info-label">已选表：</span>
-            <el-tag
+            <el-tooltip
               v-for="(table, idx) in (typeof currentSession.selected_tables === 'string' ? JSON.parse(currentSession.selected_tables) : currentSession.selected_tables)"
               :key="idx"
-              type="success"
-              size="small"
-              style="margin-right: 4px"
-              :title="getTableDescription(table)"
+              :raw-content="true"
+              :content="getTableTooltipContent(table)"
+              placement="top"
+              :disabled="getTableTooltipContent(table) === null"
+              effect="dark"
+              popper-class="table-fields-tooltip"
+              :show-after="300"
             >
-              {{ table }}
-              <span v-if="getTableDescription(table)" class="table-description">
-                ({{ getTableDescription(table) }})
-              </span>
-            </el-tag>
+              <el-tag
+                type="success"
+                size="small"
+                style="margin-right: 4px; cursor: help;"
+                @mouseenter="loadTableFields(table)"
+              >
+                {{ table }}
+                <span v-if="getTableDescription(table)" class="table-description">
+                  ({{ getTableDescription(table) }})
+                </span>
+              </el-tag>
+            </el-tooltip>
             <el-button
               type="primary"
               size="small"
@@ -131,6 +141,12 @@
             </div>
             
             <div v-else class="assistant-content">
+              <!-- 加载中状态 -->
+              <div v-if="message.is_loading" class="loading-message">
+                <el-icon class="is-loading"><Loading /></el-icon>
+                <span style="margin-left: 8px;">正在思考中...</span>
+              </div>
+              <template v-else>
               <!-- SQL展示 -->
               <div v-if="message.sql" class="sql-section">
                 <div class="section-header">
@@ -313,16 +329,14 @@
                   </el-tag>
                 </div>
               </div>
+              </template>
             </div>
           </div>
           
           <div class="message-time">{{ formatTime(message.created_at) }}</div>
         </div>
         
-        <div v-if="loading" class="loading-indicator">
-          <el-icon class="is-loading"><Loading /></el-icon>
-          <span>AI正在思考...</span>
-        </div>
+        <!-- 移除全局loading指示器，使用消息内的loading状态 -->
         
         <!-- 空状态提示 -->
         <div v-if="!loading && messages.length === 0" class="empty-message">
@@ -576,6 +590,7 @@ import { Plus, Delete, DocumentCopy, Download, Loading, DataBoard, Edit, ChatLin
 import chatApi from '@/api/chat'
 import request from '@/utils/request'
 import dashboardsApi from '@/api/dashboards'
+import api from '@/api'
 
 const sessions = ref([])
 const currentSessionId = ref(null)
@@ -596,6 +611,7 @@ const dataSources = ref([])
 const tables = ref([])
 const loadingTables = ref(false)
 const tableDescriptions = ref({}) // 存储表名和描述的映射
+const tableFieldsCache = ref({}) // 存储表字段信息缓存 { tableName: { columns: [...], loading: false } }
 
 // 编辑表相关
 const editTablesDialogVisible = ref(false)
@@ -683,6 +699,14 @@ const loadMessages = async (sessionId) => {
         // 确保contains_complex_sql字段存在
         if (msg.contains_complex_sql === undefined) {
           msg.contains_complex_sql = false
+        }
+        // 确保thinking_steps字段存在（从后端加载的消息可能包含此字段）
+        if (!msg.thinking_steps) {
+          msg.thinking_steps = []
+        }
+        // 确保is_loading字段存在（加载完成后应该为false）
+        if (msg.is_loading === undefined) {
+          msg.is_loading = false
         }
       })
       await nextTick()
@@ -820,6 +844,121 @@ const getTableDescription = (tableName) => {
   }
   
   return ''
+}
+
+// 加载表字段信息（懒加载）
+const loadTableFields = async (tableName) => {
+  // 如果已缓存或正在加载，跳过
+  if (tableFieldsCache.value[tableName] && 
+      (tableFieldsCache.value[tableName].columns || tableFieldsCache.value[tableName].loading)) {
+    return
+  }
+  
+  // 如果没有数据源ID，无法加载
+  if (!currentSession.value?.data_source_id) {
+    return
+  }
+  
+  // 标记为加载中
+  if (!tableFieldsCache.value[tableName]) {
+    tableFieldsCache.value[tableName] = { loading: true, columns: null }
+  } else {
+    tableFieldsCache.value[tableName].loading = true
+  }
+  
+  try {
+    const response = await request({
+      url: `/database-configs/${currentSession.value.data_source_id}/tables/${encodeURIComponent(tableName)}/info`,
+      method: 'get'
+    })
+    // request拦截器已经处理了响应格式
+    // 如果响应有success字段，data在response.data中
+    // 如果响应有code字段，data在response.data中
+    let columns = null
+    if (response.code === 200 || response.success) {
+      if (response.data?.columns) {
+        columns = response.data.columns
+      } else if (response.data?.data?.columns) {
+        // 兼容双重嵌套的情况
+        columns = response.data.data.columns
+      }
+    }
+    
+    if (columns && columns.length > 0) {
+      tableFieldsCache.value[tableName] = {
+        loading: false,
+        columns: columns
+      }
+      console.log(`✅ 表 ${tableName} 字段信息加载成功，共 ${columns.length} 个字段`)
+    } else {
+      tableFieldsCache.value[tableName] = { loading: false, columns: null }
+      console.warn(`⚠️ 表 ${tableName} 字段信息为空，response结构:`, {
+        code: response.code,
+        success: response.success,
+        hasData: !!response.data,
+        hasDataColumns: !!response.data?.columns,
+        hasDataDataColumns: !!response.data?.data?.columns
+      })
+    }
+  } catch (error) {
+    console.error(`❌ 加载表 ${tableName} 字段信息失败:`, error)
+    tableFieldsCache.value[tableName] = { loading: false, columns: null }
+  }
+}
+
+// 获取表字段悬停提示内容
+const getTableTooltipContent = (tableName) => {
+  const cached = tableFieldsCache.value[tableName]
+  
+  // 如果正在加载，显示加载提示
+  if (cached && cached.loading) {
+    return '<div style="padding: 8px;">正在加载字段信息...</div>'
+  }
+  
+  // 如果没有字段信息，返回null（不显示提示）
+  if (!cached || !cached.columns || cached.columns.length === 0) {
+    // 调试：记录为什么没有字段信息
+    if (!cached) {
+      console.debug(`🔍 表 ${tableName} 字段缓存不存在，需要加载`)
+    } else if (!cached.columns) {
+      console.debug(`🔍 表 ${tableName} 字段数据为空`)
+    } else if (cached.columns.length === 0) {
+      console.debug(`🔍 表 ${tableName} 字段数组为空`)
+    }
+    return null
+  }
+  
+  // 构建字段信息HTML（两列布局：字段名和字段描述）
+  const fieldsHtml = cached.columns
+    .map(col => {
+      const comment = col.comment || '无注释'
+      return `<tr style="border-bottom: 1px solid #e4e7ed;">
+        <td style="padding: 6px 8px; font-weight: 600; color: #409EFF; background-color: #f0f9ff; border-right: 1px solid #e4e7ed; white-space: nowrap;">
+          ${col.name}
+        </td>
+        <td style="padding: 6px 8px; color: #303133; background-color: #ffffff;">
+          ${comment}
+        </td>
+      </tr>`
+    })
+    .join('')
+  
+  return `<div style="max-width: 500px; max-height: 400px; overflow-y: auto; background-color: #ffffff;">
+    <div style="font-weight: 600; margin-bottom: 8px; padding: 8px; background-color: #409EFF; color: #ffffff; border-radius: 4px 4px 0 0;">
+      ${tableName} - 字段列表
+    </div>
+    <table style="width: 100%; border-collapse: collapse; background-color: #ffffff;">
+      <thead>
+        <tr style="background-color: #f5f7fa; border-bottom: 2px solid #409EFF;">
+          <th style="padding: 8px; text-align: left; font-weight: 600; color: #303133; border-right: 1px solid #e4e7ed;">字段名</th>
+          <th style="padding: 8px; text-align: left; font-weight: 600; color: #303133;">字段描述</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${fieldsHtml}
+      </tbody>
+    </table>
+  </div>`
 }
 
 // 重置创建会话表单
@@ -1063,6 +1202,37 @@ const sendMessage = async () => {
   
   const question = inputText.value.trim()
   inputText.value = ''
+  
+  // 立即添加用户消息到消息列表（临时消息，ID为负数）
+  const tempUserMessageId = -Date.now()
+  const tempUserMessage = {
+    id: tempUserMessageId,
+    role: 'user',
+    content: question,
+    created_at: new Date().toISOString(),
+    session_id: currentSessionId.value
+  }
+  messages.value.push(tempUserMessage)
+  
+  // 立即添加一个加载中的AI回复消息
+  const tempAssistantMessageId = -Date.now() - 1
+  const tempAssistantMessage = {
+    id: tempAssistantMessageId,
+    role: 'assistant',
+    content: '正在思考中...',
+    created_at: new Date().toISOString(),
+    session_id: currentSessionId.value,
+    is_loading: true
+  }
+  messages.value.push(tempAssistantMessage)
+  
+  // 滚动到底部
+  await nextTick()
+  const messagesContainer = document.querySelector('.chat-messages')
+  if (messagesContainer) {
+    messagesContainer.scrollTop = messagesContainer.scrollHeight
+  }
+  
   loading.value = true
   
   try {
@@ -1084,6 +1254,8 @@ const sendMessage = async () => {
     
     if (!dataSourceId) {
       ElMessage.error('会话未关联数据源，请重新创建会话')
+      // 移除临时消息
+      messages.value = messages.value.filter(m => m.id !== tempUserMessageId && m.id !== tempAssistantMessageId)
       loading.value = false
       return
     }
@@ -1095,18 +1267,19 @@ const sendMessage = async () => {
     })
     
     if (response.code === 200 || response.success) {
+      // 如果标题被自动更新，重新加载会话列表以显示新标题
+      await loadSessions()
+      
+      // 重新加载消息列表（这会替换临时消息）
+      await loadMessages(currentSessionId.value)
+      
       // 保存问题改写信息到最后一个用户消息（如果有）
       if (response.data?.question_rewrite) {
-        // 找到最后一条用户消息并添加改写信息
         const lastUserMessage = messages.value.filter(m => m.role === 'user').pop()
         if (lastUserMessage) {
           lastUserMessage.question_rewrite = response.data.question_rewrite
         }
       }
-      
-      // 如果标题被自动更新，重新加载会话列表以显示新标题
-      await loadSessions()
-      await loadMessages(currentSessionId.value)
       
       // 将推荐问题和复杂SQL标记保存到对应的AI回复消息中
       if (response.data?.recommended_questions && response.data.recommended_questions.length > 0) {
@@ -1118,23 +1291,16 @@ const sendMessage = async () => {
       }
       
       // 保存复杂SQL标记
-      if (response.data?.contains_complex_sql !== undefined) {
-        const lastAssistantMessage = messages.value.filter(m => m.role === 'assistant').pop()
-        if (lastAssistantMessage) {
+      const lastAssistantMessage = messages.value.filter(m => m.role === 'assistant').pop()
+      if (lastAssistantMessage) {
+        if (response.data?.contains_complex_sql !== undefined) {
           lastAssistantMessage.contains_complex_sql = response.data.contains_complex_sql
         }
-      }
-      
-      // 滚动到底部
-      await nextTick()
-      const messagesContainer = document.querySelector('.chat-messages')
-      if (messagesContainer) {
-        messagesContainer.scrollTop = messagesContainer.scrollHeight
       }
     } else {
       // 如果失败但有SQL，允许用户编辑重试或继续用自然语言提问
       if (response.data?.sql && response.data?.can_retry) {
-        // 重新加载消息以显示错误信息
+        // 重新加载消息以显示错误信息（这会替换临时消息）
         await loadMessages(currentSessionId.value)
         
         // 如果响应中包含推荐问题，保存到错误消息中
@@ -1155,12 +1321,23 @@ const sendMessage = async () => {
         })
       } else {
         ElMessage.error(response.message || '发送失败')
+        // 移除临时消息
+        messages.value = messages.value.filter(m => m.id !== tempUserMessageId && m.id !== tempAssistantMessageId)
       }
     }
   } catch (error) {
     ElMessage.error('发送消息失败：' + (error.message || '未知错误'))
+    // 移除临时消息
+    messages.value = messages.value.filter(m => m.id !== tempUserMessageId && m.id !== tempAssistantMessageId)
   } finally {
     loading.value = false
+    
+    // 滚动到底部
+    await nextTick()
+    const messagesContainer = document.querySelector('.chat-messages')
+    if (messagesContainer) {
+      messagesContainer.scrollTop = messagesContainer.scrollHeight
+    }
   }
 }
 
@@ -2503,5 +2680,35 @@ onMounted(async () => {
 .complex-sql-info li {
   margin-bottom: 4px;
 }
+
+/* 表字段悬停提示样式 */
+:deep(.table-fields-tooltip) {
+  max-width: 500px !important;
+}
+
+:deep(.table-fields-tooltip .el-tooltip__inner) {
+  background-color: #ffffff !important;
+  color: #303133 !important;
+  text-align: left;
+  line-height: 1.6;
+  white-space: normal;
+  word-wrap: break-word;
+  padding: 0 !important;
+  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+}
+
+/* 加载中消息样式 */
+.loading-message {
+  display: flex;
+  align-items: center;
+  padding: 12px;
+  color: #909399;
+  font-size: 14px;
+}
+
+.loading-message .el-icon {
+  font-size: 16px;
+}
+
 </style>
 

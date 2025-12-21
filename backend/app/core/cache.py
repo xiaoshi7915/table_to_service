@@ -8,6 +8,7 @@ import threading
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 from loguru import logger
+from app.core.config import settings
 
 try:
     import redis
@@ -50,14 +51,38 @@ class CacheService:
                 
                 # 方式1: 使用from_url（推荐方式）
                 try:
-                    self.redis_client = redis.from_url(
-                        redis_url, 
-                        decode_responses=True,
-                        socket_connect_timeout=5,
-                        socket_timeout=5,
-                        socket_keepalive=True,
-                        health_check_interval=30
-                    )
+                    # 解析URL，确保正确处理无密码的情况
+                    from urllib.parse import urlparse
+                    parsed = urlparse(redis_url)
+                    # 如果URL中没有密码，且环境变量中有密码，使用环境变量
+                    password = parsed.password if parsed.password else (settings.REDIS_PASSWORD if settings.REDIS_PASSWORD else None)
+                    # 如果密码是空字符串，设置为 None（Redis 无密码）
+                    if password == "":
+                        password = None
+                    
+                    # 如果URL中没有密码，需要手动构建URL
+                    if not parsed.password and password is None:
+                        # 无密码情况，直接使用from_url
+                        self.redis_client = redis.from_url(
+                            redis_url, 
+                            decode_responses=True,
+                            socket_connect_timeout=10,
+                            socket_timeout=10,
+                            socket_keepalive=True,
+                            retry_on_timeout=True,
+                            health_check_interval=30
+                        )
+                    else:
+                        # 有密码情况，使用from_url
+                        self.redis_client = redis.from_url(
+                            redis_url, 
+                            decode_responses=True,
+                            socket_connect_timeout=10,
+                            socket_timeout=10,
+                            socket_keepalive=True,
+                            retry_on_timeout=True,
+                            health_check_interval=30
+                        )
                     # 测试连接
                     self.redis_client.ping()
                     connection_success = True
@@ -71,25 +96,41 @@ class CacheService:
                         # 解析URL获取连接参数
                         from urllib.parse import urlparse
                         parsed = urlparse(redis_url)
-                        password = parsed.password if parsed.password else None
+                        # 如果 URL 中没有密码，且环境变量中有密码，使用环境变量
+                        password = parsed.password if parsed.password else (settings.REDIS_PASSWORD if settings.REDIS_PASSWORD else None)
+                        # 如果密码是空字符串，设置为 None（Redis 无密码）
+                        if password == "":
+                            password = None
                         host = parsed.hostname or '127.0.0.1'
                         port = parsed.port or 6379
-                        db = int(parsed.path.lstrip('/')) if parsed.path else 0
+                        # 优先使用 URL 中的 db，否则使用配置中的 REDIS_DB
+                        db = int(parsed.path.lstrip('/')) if parsed.path and parsed.path != '/' else settings.REDIS_DB
                         
-                        self.redis_client = redis.Redis(
-                            host=host,
-                            port=port,
-                            db=db,
-                            password=password,
-                            decode_responses=False,  # 先不使用decode_responses
-                            socket_connect_timeout=5,
-                            socket_timeout=5,
-                            socket_keepalive=True
-                        )
-                        # 测试连接
-                        result = self.redis_client.ping()
-                        if result:
-                            # 如果成功，重新创建支持decode_responses的客户端
+                        logger.debug(f"尝试直接连接Redis: {host}:{port}/{db}, password={'***' if password else 'None'}")
+                        
+                        # 直接连接Redis（无密码情况）
+                        # 注意：Docker Redis可能配置了protected-mode，需要特殊处理
+                        # 先尝试不使用health_check（某些Redis配置可能不支持）
+                        try:
+                            self.redis_client = redis.Redis(
+                                host=host,
+                                port=port,
+                                db=db,
+                                password=password,  # None 表示无密码
+                                decode_responses=True,
+                                socket_connect_timeout=10,
+                                socket_timeout=10,
+                                retry_on_timeout=True
+                            )
+                            # 测试连接
+                            result = self.redis_client.ping()
+                            if result:
+                                connection_success = True
+                                logger.info(f"✅ 使用Redis作为缓存后端（直接连接）: {host}:{port}/{db}")
+                        except Exception as ping_error:
+                            # ping失败，可能是health_check或socket_keepalive导致的问题
+                            logger.debug(f"Redis连接失败，尝试简化配置: {ping_error}")
+                            # 使用最简配置重试
                             self.redis_client = redis.Redis(
                                 host=host,
                                 port=port,
@@ -97,12 +138,12 @@ class CacheService:
                                 password=password,
                                 decode_responses=True,
                                 socket_connect_timeout=5,
-                                socket_timeout=5,
-                                socket_keepalive=True
+                                socket_timeout=5
                             )
-                            self.redis_client.ping()
-                            connection_success = True
-                            logger.info(f"✅ 使用Redis作为缓存后端（直接连接）: {host}:{port}/{db}")
+                            result = self.redis_client.ping()
+                            if result:
+                                connection_success = True
+                                logger.info(f"✅ 使用Redis作为缓存后端（简化配置）: {host}:{port}/{db}")
                     except Exception as e2:
                         last_error = e2
                         logger.debug(f"Redis直接连接也失败: {type(e2).__name__}: {e2}")

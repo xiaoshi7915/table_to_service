@@ -6,6 +6,8 @@ from typing import List
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+from urllib.parse import quote_plus
+from loguru import logger
 
 # 获取backend目录的路径
 BACKEND_DIR = Path(__file__).parent.parent.parent
@@ -34,6 +36,7 @@ class Settings(BaseSettings):
     DB_NAME: str = os.getenv("DB_NAME", "test_db")
     
     # 本地数据库配置（用于服务自身数据存储：用户表等）
+    LOCAL_DB_TYPE: str = os.getenv("LOCAL_DB_TYPE", "mysql").lower()  # 支持 mysql 或 postgresql
     LOCAL_DB_HOST: str = os.getenv("LOCAL_DB_HOST", "localhost")
     LOCAL_DB_PORT: int = int(os.getenv("LOCAL_DB_PORT", "3306"))
     LOCAL_DB_USER: str = os.getenv("LOCAL_DB_USER", "root")
@@ -82,7 +85,23 @@ class Settings(BaseSettings):
     @property
     def local_database_url(self) -> str:
         """生成本地数据库连接URL（用于服务自身数据存储）"""
-        return f"mysql+pymysql://{self.LOCAL_DB_USER}:{self.LOCAL_DB_PASSWORD}@{self.LOCAL_DB_HOST}:{self.LOCAL_DB_PORT}/{self.LOCAL_DB_NAME}?charset=utf8mb4"
+        db_type = self.LOCAL_DB_TYPE.lower()
+        
+        # 清理 hostname（去除首尾空格）
+        clean_host = self.LOCAL_DB_HOST.strip() if self.LOCAL_DB_HOST else ""
+        
+        # 编码用户名和密码中的特殊字符
+        encoded_user = quote_plus(self.LOCAL_DB_USER)
+        encoded_password = quote_plus(self.LOCAL_DB_PASSWORD)
+        
+        if db_type == "postgresql":
+            # PostgreSQL: postgresql+psycopg2://user:pass@host:port/db
+            return f"postgresql+psycopg2://{encoded_user}:{encoded_password}@{clean_host}:{self.LOCAL_DB_PORT}/{self.LOCAL_DB_NAME}"
+        elif db_type == "mysql":
+            # MySQL: mysql+pymysql://user:pass@host:port/db?charset=utf8mb4
+            return f"mysql+pymysql://{encoded_user}:{encoded_password}@{clean_host}:{self.LOCAL_DB_PORT}/{self.LOCAL_DB_NAME}?charset=utf8mb4"
+        else:
+            raise ValueError(f"不支持的本地数据库类型: {db_type}，支持的类型: mysql, postgresql")
     
     @property
     def allowed_origins_list(self) -> List[str]:

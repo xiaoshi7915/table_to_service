@@ -38,6 +38,7 @@ langgraph>=0.3,<0.4
 pgvector>=0.4.1  # PostgreSQL向量扩展
 psycopg[binary]>=3.1.13,<4.0.0  # PostgreSQL驱动
 sentence-transformers>=4.0.2  # 中文嵌入模型（bge-base-zh-v1.5）
+rank_bm25 # BM25检索器
 
 # 其他工具
 tenacity>=8.2.3,<9.0.0  # 重试库

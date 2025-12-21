@@ -27,19 +27,38 @@ target_engine = create_engine(
 
 # 创建本地数据库引擎（用于服务自身数据存储）
 # 使用独立的连接池配置，通常需要更少的连接
-local_engine = create_engine(
-    settings.local_database_url,
-    pool_pre_ping=True,
-    pool_recycle=settings.DB_POOL_RECYCLE,
-    pool_size=settings.LOCAL_DB_POOL_SIZE,  # 本地数据库连接池大小（可配置）
-    max_overflow=settings.LOCAL_DB_MAX_OVERFLOW,  # 本地数据库最大溢出连接数（可配置）
-    echo=settings.DEBUG,
-    connect_args={
-        "connect_timeout": 10,
-        "read_timeout": 10,
-        "write_timeout": 10,
-    }
-)
+# 根据数据库类型设置不同的连接参数
+local_db_type = settings.LOCAL_DB_TYPE.lower()
+if local_db_type == "postgresql":
+    # PostgreSQL连接参数
+    local_engine = create_engine(
+        settings.local_database_url,
+        pool_pre_ping=True,
+        pool_recycle=settings.DB_POOL_RECYCLE,
+        pool_size=settings.LOCAL_DB_POOL_SIZE,
+        max_overflow=settings.LOCAL_DB_MAX_OVERFLOW,
+        echo=settings.DEBUG,
+        connect_args={
+            "connect_timeout": 10,
+        }
+    )
+elif local_db_type == "mysql":
+    # MySQL连接参数
+    local_engine = create_engine(
+        settings.local_database_url,
+        pool_pre_ping=True,
+        pool_recycle=settings.DB_POOL_RECYCLE,
+        pool_size=settings.LOCAL_DB_POOL_SIZE,
+        max_overflow=settings.LOCAL_DB_MAX_OVERFLOW,
+        echo=settings.DEBUG,
+        connect_args={
+            "connect_timeout": 10,
+            "read_timeout": 10,
+            "write_timeout": 10,
+        }
+    )
+else:
+    raise ValueError(f"不支持的本地数据库类型: {local_db_type}，支持的类型: mysql, postgresql")
 
 # 为了向后兼容，保留 engine 作为目标数据库引擎
 engine = target_engine

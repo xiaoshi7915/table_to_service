@@ -79,9 +79,11 @@ async def generate_session_title(
             else:
                 generated_title = first_question[:20] + "..."
         
-        # 更新会话标题
+        # 更新会话标题（确保使用传入的数据库会话）
         session.title = generated_title
-        logger.info(f"自动生成对话标题: {generated_title}")
+        # 将更改添加到会话（确保 SQLAlchemy 跟踪更改）
+        db.merge(session)
+        logger.info(f"自动生成对话标题: {generated_title} (会话ID: {session.id})")
         
     except Exception as e:
         logger.error(f"生成对话标题失败: {e}", exc_info=True)
@@ -836,11 +838,11 @@ async def send_message(
             except ImportError:
                 from langchain.schema import Document, BaseRetriever
         
-            # 初始化嵌入服务
+            # 初始化嵌入服务（使用单例模式，避免重复加载模型）
             embedding_service = None
             try:
-                embedding_service = ChineseEmbeddingService()
-                logger.info("使用中文嵌入模型（bge-base-zh-v1.5）")
+                embedding_service = ChineseEmbeddingService.get_instance()
+                logger.info("使用中文嵌入模型（bge-base-zh-v1.5，单例模式）")
             except Exception as e:
                 logger.warning(f"中文嵌入模型加载失败: {e}，将使用传统检索")
         
@@ -936,24 +938,30 @@ async def send_message(
                         for k in knowledge_items
                     ]
                     
-                    # 创建混合检索器
+                    # 创建混合检索器（仅在向量存储可用时）
                     if term_docs:
-                        terminology_retriever = HybridRetriever(
-                            vector_store=vector_manager.get_store("terminologies"),
-                            documents=term_docs
-                        )
+                        term_store = vector_manager.get_store("terminologies")
+                        if term_store:
+                            terminology_retriever = HybridRetriever(
+                                vector_store=term_store,
+                                documents=term_docs
+                            )
                     
                     if sql_docs:
-                        sql_example_retriever = HybridRetriever(
-                            vector_store=vector_manager.get_store("sql_examples"),
-                            documents=sql_docs
-                        )
+                        sql_store = vector_manager.get_store("sql_examples")
+                        if sql_store:
+                            sql_example_retriever = HybridRetriever(
+                                vector_store=sql_store,
+                                documents=sql_docs
+                            )
                     
                     if knowledge_docs:
-                        knowledge_retriever = HybridRetriever(
-                            vector_store=vector_manager.get_store("knowledge"),
-                            documents=knowledge_docs
-                        )
+                        knowledge_store = vector_manager.get_store("knowledge")
+                        if knowledge_store:
+                            knowledge_retriever = HybridRetriever(
+                                vector_store=knowledge_store,
+                                documents=knowledge_docs
+                            )
                     
                 except Exception as e:
                     logger.warning(f"创建检索器失败: {e}，将使用简化版本")
@@ -1344,9 +1352,9 @@ SQL执行失败，错误信息：{execution_error or error}
             if not explanation_content:
                 # 如果没有explanation，生成一个默认的
                 if data and len(data) > 0:
-                    explanation_content = f"SQL查询执行成功，返回 {len(data)} 条数据"
+                    explanation_content = f"✅ SQL查询执行成功，返回 {len(data)} 条数据"
                 else:
-                    explanation_content = "SQL查询执行成功，但未返回数据"
+                    explanation_content = "✅ SQL查询执行成功，查询结果为空（0条数据）。这是正常情况，表示当前查询条件下没有匹配的数据。"
                 logger.info(f"步骤2 - 生成默认explanation_content: {explanation_content}")
             
             if data_summary:
@@ -1390,19 +1398,33 @@ SQL执行失败，错误信息：{execution_error or error}
             # 如果这是第一条用户消息（user_messages_count == 0），或者标题是默认标题格式，则生成新标题
             # 使用后台任务，不阻塞响应
             if user_messages_count == 0 or (session.title and ("新对话" in session.title or session.title.startswith("对话 "))):
+                # 保存 session_id 用于后台任务
+                session_id_for_title = session.id
+                question_for_title = request.question
+                
                 # 创建后台任务生成标题（不等待）
                 async def generate_title_background():
                     try:
                         # 需要重新获取数据库会话（因为原会话可能已关闭）
                         from app.core.database import LocalSessionLocal
+                        from app.models import ChatSession
                         db_session = LocalSessionLocal()
                         try:
-                            await generate_session_title(session, request.question, db_session, llm_client)
-                            db_session.commit()
+                            # 重新从数据库加载 session 对象（重要：使用新的数据库会话）
+                            session_to_update = db_session.query(ChatSession).filter(
+                                ChatSession.id == session_id_for_title
+                            ).first()
+                            
+                            if session_to_update:
+                                await generate_session_title(session_to_update, question_for_title, db_session, llm_client)
+                                db_session.commit()
+                                logger.info(f"✅ 对话标题已更新并保存到数据库: {session_to_update.title}")
+                            else:
+                                logger.warning(f"未找到会话 {session_id_for_title}，无法更新标题")
                         finally:
                             db_session.close()
                     except Exception as e:
-                        logger.warning(f"自动生成对话标题失败: {e}，保留原标题")
+                        logger.warning(f"自动生成对话标题失败: {e}，保留原标题", exc_info=True)
                 
                 # 不等待，让它在后台执行
                 asyncio.create_task(generate_title_background())
@@ -1420,6 +1442,7 @@ SQL执行失败，错误信息：{execution_error or error}
                     "data_summary": data_summary,  # 单独返回数据总结（可选）
                     "chart_type": chart_config.get("type") if chart_config else None,
                     "chart_config": chart_config,
+                    "thinking_steps": workflow_result.get("thinking_steps", []),  # 返回思考步骤
                     "data": data[:100] if data else [],  # 只返回前100条
                     "data_total": len(data) if data else 0,
                     "tokens_used": 0,  # 注意：token使用量统计功能待实现
