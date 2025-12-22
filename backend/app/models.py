@@ -312,6 +312,7 @@ class ChatMessage(Base):
     error_message = Column(Text, nullable=True, comment="错误信息（如有）")
     tokens_used = Column(Integer, nullable=True, comment="使用的token数")
     response_time = Column(String(20), nullable=True, comment="响应时间（秒）")
+    recommended_questions = Column(Text, nullable=True, comment="推荐问题（JSON格式）")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
     
     # 关系

@@ -600,6 +600,7 @@ const inputText = ref('')
 const loading = ref(false)
 const recommendedQuestions = ref([])
 const chartInstances = ref({})
+const pollingTimer = ref(null) // 轮询定时器
 
 // 新建会话相关
 const createSessionDialogVisible = ref(false)
@@ -1297,6 +1298,11 @@ const sendMessage = async () => {
           lastAssistantMessage.contains_complex_sql = response.data.contains_complex_sql
         }
       }
+      
+      // 如果后台任务正在生成推荐问题，启动轮询以获取更新后的推荐问题
+      if (response.data?.background_tasks?.data_summary && lastAssistantMessage) {
+        startPollingForRecommendedQuestions(lastAssistantMessage.id)
+      }
     } else {
       // 如果失败但有SQL，允许用户编辑重试或继续用自然语言提问
       if (response.data?.sql && response.data?.can_retry) {
@@ -1357,6 +1363,46 @@ const loadRecommendedQuestions = async () => {
   } catch (error) {
     console.error('加载推荐问题失败:', error)
   }
+}
+
+// 轮询获取推荐问题（后台任务完成后）
+const startPollingForRecommendedQuestions = (messageId) => {
+  // 清除之前的定时器
+  if (pollingTimer.value) {
+    clearInterval(pollingTimer.value)
+  }
+  
+  let pollCount = 0
+  const maxPolls = 20 // 最多轮询20次（约10秒）
+  
+  pollingTimer.value = setInterval(async () => {
+    pollCount++
+    
+    try {
+      // 重新加载消息列表
+      await loadMessages(currentSessionId.value)
+      
+      // 查找对应的消息
+      const message = messages.value.find(m => m.id === messageId)
+      if (message && message.recommended_questions && message.recommended_questions.length > 0) {
+        // 找到推荐问题，停止轮询
+        clearInterval(pollingTimer.value)
+        pollingTimer.value = null
+        return
+      }
+      
+      // 如果达到最大轮询次数，停止轮询
+      if (pollCount >= maxPolls) {
+        clearInterval(pollingTimer.value)
+        pollingTimer.value = null
+      }
+    } catch (error) {
+      console.error('轮询推荐问题失败:', error)
+      // 出错时停止轮询
+      clearInterval(pollingTimer.value)
+      pollingTimer.value = null
+    }
+  }, 500) // 每500ms轮询一次
 }
 
 // 选择推荐问题（从AI回复下方的推荐问题）
@@ -2261,6 +2307,11 @@ const confirmRetrySQL = async () => {
 
 // 清理资源
 onUnmounted(() => {
+  // 清除轮询定时器
+  if (pollingTimer.value) {
+    clearInterval(pollingTimer.value)
+    pollingTimer.value = null
+  }
   // 清理所有图表实例
   Object.keys(chartInstances.value).forEach(chartId => {
     try {

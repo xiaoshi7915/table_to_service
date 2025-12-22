@@ -1754,6 +1754,16 @@ async def get_messages(
                 except:
                     pass
             
+            # 解析推荐问题（JSON格式）
+            recommended_questions = []
+            if msg.recommended_questions:
+                try:
+                    recommended_questions = json.loads(msg.recommended_questions)
+                    if not isinstance(recommended_questions, list):
+                        recommended_questions = []
+                except:
+                    recommended_questions = []
+            
             message_list.append({
                 "id": msg.id,
                 "session_id": msg.session_id,
@@ -1766,6 +1776,7 @@ async def get_messages(
                 "data": query_result[:100] if query_result else None,  # 只返回前100条
                 "data_total": len(query_result) if query_result else 0,
                 "tokens_used": msg.tokens_used,
+                "recommended_questions": recommended_questions,  # 推荐问题列表
                 "created_at": msg.created_at.isoformat()
             })
         
