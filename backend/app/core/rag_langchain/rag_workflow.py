@@ -34,6 +34,7 @@ class RAGState(TypedDict):
     question: str
     db_config: DatabaseConfig
     selected_tables: List[str]  # 用户选择的表
+    conversation_history: List[Dict[str, str]]  # 对话历史
     
     # 中间状态
     schema_info: Dict[str, Any]  # Schema信息
@@ -280,6 +281,7 @@ class RAGWorkflow:
         schema_info = state["schema_info"]
         contexts = state["merged_context"]
         question = state["question"]
+        conversation_history = state.get("conversation_history", [])
         db_type = state["db_config"].db_type or "mysql"
         
         # 构建Schema部分
@@ -287,6 +289,15 @@ class RAGWorkflow:
         
         # 构建上下文部分
         context_text = self._format_contexts(contexts)
+        
+        # 构建对话历史部分
+        history_text = ""
+        if conversation_history:
+            history_text = "\n## 对话历史（可能包含参数值）\n"
+            for msg in conversation_history[-5:]:  # 只取最近5条消息
+                role = "用户" if msg.get("role") == "user" else "助手"
+                content = msg.get("content", "")[:200]  # 限制长度
+                history_text += f"{role}: {content}\n"
         
         # 构建完整提示词
         prompt = f"""你是一个专业的SQL生成助手。请根据以下信息生成SQL查询语句。
@@ -296,19 +307,20 @@ class RAGWorkflow:
 
 ## 相关上下文信息
 {context_text}
-
+{history_text}
 ## 用户问题
 {question}
 
 ## 要求
 1. **只生成SELECT查询语句**，绝对不要生成INSERT、UPDATE、DELETE、CREATE、DROP、ALTER等任何修改或建表语句
 2. **禁止使用临时表**：如果查询逻辑复杂，请使用子查询、CTE（WITH子句）或JOIN来实现，不要创建临时表
-3. 使用参数化查询防止SQL注入（使用:param_name格式）
-4. 根据问题意图选择合适的聚合函数（SUM、COUNT、AVG、MAX、MIN等）
-5. 合理使用GROUP BY、ORDER BY、LIMIT等子句
-6. 生成的SQL要符合{db_type.upper()}语法规范
-7. 如果问题中提到了业务术语，请使用对应的数据库字段名
-8. 注意表之间的关联关系，使用正确的JOIN语句
+3. **重要：如果对话历史中提到了参数值（如 job_fair_id = xxx），请在SQL中直接使用该值，而不是使用参数占位符**
+4. 使用参数化查询防止SQL注入（使用:param_name格式），但前提是对话历史中没有提供该参数的值
+5. 根据问题意图选择合适的聚合函数（SUM、COUNT、AVG、MAX、MIN等）
+6. 合理使用GROUP BY、ORDER BY、LIMIT等子句
+7. 生成的SQL要符合{db_type.upper()}语法规范
+8. 如果问题中提到了业务术语，请使用对应的数据库字段名
+9. 注意表之间的关联关系，使用正确的JOIN语句
 
 **重要：如果查询需要复杂逻辑，请使用子查询或CTE，不要使用CREATE TABLE语句。**
 
@@ -513,6 +525,28 @@ class RAGWorkflow:
             return state
         
         try:
+            # 从对话历史中提取参数值
+            extracted_params = {}
+            conversation_history = state.get("conversation_history", [])
+            
+            if conversation_history:
+                # 从对话历史中提取参数值（格式：param_name = value 或 param_name为value）
+                import re
+                for msg in conversation_history:
+                    content = msg.get("content", "")
+                    # 匹配模式：job_fair_id = xxx 或 job_fair_id为xxx 或 job_fair_id: xxx
+                    patterns = [
+                        r'(\w+)\s*[=为:]\s*([^\s,，。]+)',  # job_fair_id = value 或 job_fair_id为value
+                        r'(\w+)\s+是\s+([^\s,，。]+)',  # job_fair_id 是 value
+                    ]
+                    for pattern in patterns:
+                        matches = re.findall(pattern, content, re.IGNORECASE)
+                        for param_name, param_value in matches:
+                            # 清理参数值（移除引号等）
+                            param_value = param_value.strip('"\'`')
+                            if param_value and len(param_value) > 0:
+                                extracted_params[param_name.lower()] = param_value
+            
             # 使用SQL执行服务
             from .sql_executor import SQLExecutor
             
@@ -524,7 +558,8 @@ class RAGWorkflow:
                 cache_ttl=600  # 10分钟
             )
             
-            result = executor.execute(sql)
+            # 传递提取的参数值
+            result = executor.execute(sql, params=extracted_params if extracted_params else None)
             
             if result["success"]:
                 state["sql_execution_result"] = {
@@ -533,7 +568,8 @@ class RAGWorkflow:
                     "row_count": result["row_count"],
                     "total_rows": result.get("total_rows", result["row_count"]),
                     "columns": result.get("columns", []),
-                    "execution_time": result.get("execution_time", 0)
+                    "execution_time": result.get("execution_time", 0),
+                    "unbound_params": result.get("unbound_params", [])  # 传递未绑定参数信息
                 }
                 state["execution_error"] = None
                 state["final_sql"] = sql
@@ -918,7 +954,8 @@ class RAGWorkflow:
         self,
         question: str,
         db_config: DatabaseConfig,
-        selected_tables: Optional[List[str]] = None
+        selected_tables: Optional[List[str]] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None
     ) -> Dict[str, Any]:
         """
         运行工作流
@@ -947,7 +984,8 @@ class RAGWorkflow:
             final_sql="",
             final_result={},
             chart_config=None,
-            explanation=""
+            explanation="",
+            conversation_history=conversation_history or []  # 保存对话历史
         )
         
         try:
@@ -961,16 +999,18 @@ class RAGWorkflow:
                 # 如果final_result为空，从状态中提取
                 # 确保SQL被正确提取（优先使用final_sql，如果没有则使用sql）
                 extracted_sql = result.get("final_sql") or result.get("sql", "")
+                sql_execution_result = result.get("sql_execution_result", {})
                 final_result = {
                     "sql": extracted_sql,
                     "final_sql": extracted_sql,  # 确保final_sql字段存在
-                    "data": result.get("sql_execution_result", {}).get("data", []) if result.get("sql_execution_result") and result.get("sql_execution_result").get("success") else [],
+                    "data": sql_execution_result.get("data", []) if sql_execution_result and sql_execution_result.get("success") else [],
                     "chart_config": result.get("chart_config"),
                     "explanation": result.get("explanation", ""),
                     "retry_count": result.get("retry_count", 0),
                     "error": result.get("execution_error"),
                     "contains_complex_sql": result.get("contains_complex_sql", False),  # 添加复杂SQL标记
-                    "thinking_steps": result.get("thinking_steps", [])  # 添加思考步骤
+                    "thinking_steps": result.get("thinking_steps", []),  # 添加思考步骤
+                    "sql_execution_result": sql_execution_result  # 传递完整的sql_execution_result，包含unbound_params
                 }
             
             # 确保返回contains_complex_sql字段和final_sql字段

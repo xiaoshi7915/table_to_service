@@ -141,7 +141,7 @@ class SQLExecutor:
             try:
                 # 参数化查询（防止SQL注入）
                 # 注意：即使params为空，也要检查SQL中是否有未绑定的参数占位符
-                formatted_sql, query_params = self._parameterize_sql(sql, params or {}, adapter)
+                formatted_sql, query_params, unbound_params = self._parameterize_sql(sql, params or {}, adapter)
                 
                 # 执行查询 - 使用SQLAlchemy的参数绑定机制
                 if query_params:
@@ -169,7 +169,8 @@ class SQLExecutor:
                     "total_rows": len(rows),  # 实际查询到的行数（可能超过max_rows）
                     "columns": list(columns),
                     "execution_time": elapsed_time,
-                    "from_cache": False
+                    "from_cache": False,
+                    "unbound_params": list(unbound_params) if unbound_params else []  # 传递未绑定参数信息
                 }
                 
                 # 7. 缓存结果（如果启用且执行成功）
@@ -285,7 +286,7 @@ class SQLExecutor:
                 logger.warning(f"检测到潜在的SQL注入模式: {pattern}, SQL片段: {sql[match.start():match.end()+50] if match else 'N/A'}")
                 raise ValueError("检测到潜在的SQL注入攻击")
     
-    def _parameterize_sql(self, sql: str, params: Dict[str, Any], adapter) -> Tuple[str, Dict[str, Any]]:
+    def _parameterize_sql(self, sql: str, params: Dict[str, Any], adapter) -> Tuple[str, Dict[str, Any], set]:
         """
         参数化SQL（防止SQL注入）
         
@@ -295,7 +296,7 @@ class SQLExecutor:
             adapter: SQL方言适配器
             
         Returns:
-            (SQL语句, 参数字典) 元组，用于SQLAlchemy的参数化查询
+            (SQL语句, 参数字典, 未绑定参数集合) 元组，用于SQLAlchemy的参数化查询
         """
         # 如果SQL已经包含参数占位符（:param_name），处理参数绑定
         if ':' in sql:
@@ -357,10 +358,10 @@ class SQLExecutor:
                 sql = processed_sql
                 logger.info(f"已处理未绑定参数，修改后的SQL预览: {sql[:200]}...")
             
-            return sql, filtered_params
+            return sql, filtered_params, unbound_params
         
         # 如果SQL中没有占位符，返回原始SQL和空参数字典
-        return sql, {}
+        return sql, {}, set()
     
     def _process_results(
         self,

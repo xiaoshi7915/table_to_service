@@ -15,21 +15,6 @@
           <el-icon><DataBoard /></el-icon>
           <span>仪表盘</span>
         </el-menu-item>
-
-        <el-menu-item index="/interface-config">
-          <el-icon><Tools /></el-icon>
-          <span>表转服务</span>
-        </el-menu-item>
-
-        <el-menu-item index="/chat">
-            <el-icon><ChatLineRound /></el-icon>
-            <span>智能问数</span>
-        </el-menu-item>
-
-        <el-menu-item index="/dashboard-list">
-            <el-icon><DataBoard /></el-icon>
-            <span>仪表板</span>
-        </el-menu-item>
         
         <el-menu-item index="/database-config">
           <el-icon><Connection /></el-icon>
@@ -41,6 +26,10 @@
             <el-icon><Tools /></el-icon>
             <span>表转服务</span>
           </template>
+        <el-menu-item index="/interface-config">
+          <el-icon><Tools /></el-icon>
+          <span>表转服务</span>
+        </el-menu-item>
         <el-menu-item index="/interface-list">
           <el-icon><List /></el-icon>
           <span>接口清单</span>
@@ -58,6 +47,10 @@
             <el-icon><ChatLineRound /></el-icon>
             <span>智能问数</span>
           </template>
+        <el-menu-item index="/chat">
+            <el-icon><ChatLineRound /></el-icon>
+            <span>智能问数</span>
+        </el-menu-item>
           <el-menu-item index="/ai-model-config">
             <el-icon><Cpu /></el-icon>
             <span>AI模型配置</span>
@@ -83,6 +76,10 @@
             <span>历史对话</span>
           </el-menu-item>
         </el-sub-menu>
+        <el-menu-item index="/dashboard-list">
+            <el-icon><DataBoard /></el-icon>
+            <span>仪表板</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
     

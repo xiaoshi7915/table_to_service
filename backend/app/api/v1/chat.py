@@ -1121,11 +1121,28 @@ async def send_message(
             max_retries=3
             )
         
-            # 11. 运行工作流（使用改写后的问题，传递选择的表列表）
+            # 11. 获取对话历史（用于参数提取）
+            conversation_history = []
+            try:
+                # 获取最近的对话消息（最多10条，用于上下文）
+                recent_messages = db.query(ChatMessage).filter(
+                    ChatMessage.session_id == session_id
+                ).order_by(ChatMessage.created_at.desc()).limit(10).all()
+                
+                # 转换为对话历史格式（从旧到新）
+                conversation_history = [
+                    {"role": msg.role, "content": msg.content}
+                    for msg in reversed(recent_messages)
+                ]
+            except Exception as e:
+                logger.warning(f"获取对话历史失败: {e}")
+            
+            # 12. 运行工作流（使用改写后的问题，传递选择的表列表和对话历史）
             workflow_result = rag_workflow.run(
             question=rewritten_question,  # 使用改写后的问题
             db_config=db_config,
-            selected_tables=selected_tables  # 使用从会话或请求中获取的表列表
+            selected_tables=selected_tables,  # 使用从会话或请求中获取的表列表
+            conversation_history=conversation_history  # 传递对话历史
             )
         
             # 12. 提取结果
@@ -1141,6 +1158,9 @@ async def send_message(
             error = workflow_result.get("error")
             execution_error = workflow_result.get("execution_error")
             contains_complex_sql = workflow_result.get("contains_complex_sql", False)
+            # 从sql_execution_result中提取unbound_params
+            sql_execution_result = workflow_result.get("sql_execution_result", {})
+            unbound_params = sql_execution_result.get("unbound_params", []) if sql_execution_result else []
             error_content = None  # 初始化error_content，避免未定义错误
             
             # 确保data和chart_config被初始化
@@ -1502,18 +1522,23 @@ SQL执行失败，错误信息：{execution_error or error}
                     logger.error(f"后台更新消息失败: {e}", exc_info=True)
             
             # 15. 保存AI回复（不包含数据总结，数据总结将在后台任务中添加）
-            logger.info(f"准备保存AI回复: workflow_result存在={workflow_result is not None}, data长度={len(data) if data else 0}, error={error}, execution_error={execution_error}")
+            logger.info(f"准备保存AI回复: workflow_result存在={workflow_result is not None}, data长度={len(data) if data else 0}, error={error}, execution_error={execution_error}, unbound_params={unbound_params}")
             
             explanation_content = workflow_result.get("explanation") if workflow_result else None
-            logger.info(f"步骤1 - 初始explanation_content: {explanation_content}, data长度: {len(data) if data else 0}")
+            logger.info(f"步骤1 - 初始explanation_content: {explanation_content}, data长度: {len(data) if data else 0}, unbound_params={unbound_params}")
             
-            if not explanation_content:
+            # 检查是否有未绑定参数且返回0条数据，需要更新消息
+            if unbound_params and len(unbound_params) > 0 and (not data or len(data) == 0):
+                # 如果有未绑定参数且返回0条数据，无论explanation_content是否有值，都要更新为警告消息
+                explanation_content = f"⚠️ SQL查询执行成功，但检测到未绑定的参数: {', '.join(unbound_params)}。\n\n由于缺少这些参数值，系统已自动移除了相关的WHERE条件，导致查询结果可能不准确。\n\n**建议：**\n- 请提供完整的查询参数，或重新描述您的查询需求\n- 当前执行的SQL已移除了未绑定参数的条件"
+                logger.info(f"步骤2 - 检测到未绑定参数，更新explanation_content: {explanation_content[:200]}")
+            elif not explanation_content:
                 # 如果没有explanation，生成一个默认的
                 if data and len(data) > 0:
                     explanation_content = f"✅ SQL查询执行成功，返回 {len(data)} 条数据"
                 else:
                     explanation_content = "✅ SQL查询执行成功，查询结果为空（0条数据）。这是正常情况，表示当前查询条件下没有匹配的数据。"
-                logger.info(f"步骤2 - 生成默认explanation_content: {explanation_content}")
+                logger.info(f"步骤2 - 生成默认explanation_content: {explanation_content[:200]}")
             
             # 注意：不再在这里添加data_summary，将在后台任务中添加
             # if data_summary:
