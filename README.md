@@ -194,33 +194,15 @@ table_to_service/
 - ✅ **CORS配置**：跨域请求安全控制
 - ✅ **数据脱敏**：支持敏感数据脱敏功能
 
-详细安全说明请参考 [SECURITY.md](SECURITY.md)
 
 ## 📚 文档
 
-### 基础文档
-- [部署文档](docs/DEPLOYMENT.md) - 详细的部署和配置指南
-- [服务管理说明](服务管理说明.md)
-- [Nginx配置说明](配置nginx代理.md)
-- [安全说明](SECURITY.md)
-- [密码安全说明](密码安全说明.md)
-- [多数据源测试总结](多数据源测试完成总结.md)
-- [Redis缓存配置](docs/REDIS_SETUP.md)
-- [SQL注入防护文档](docs/SQL_INJECTION_PROTECTION.md) - SQL执行路径安全检查清单
-
-### 智能问数功能文档 ✅ 已完成
-- [需求文档](requirements.md) - 详细的功能需求和验收标准
-- [设计文档](design.md) - 系统架构、数据模型、API设计
-- [实现路线图](implementation_roadmap.md) - 分阶段实现计划和开发步骤
-
-### 用户文档 ✅ 已完成
+### 用户文档 
 - [用户使用手册](docs/USER_MANUAL.md) - 用户操作指南
 - [管理员配置手册](docs/ADMIN_MANUAL.md) - 系统配置和管理指南
 - [API文档](http://121.36.205.70:8300/docs) - 在线API文档（Swagger UI）
 
-### 技术文档 ✅ 已完成
-- [SQL注入防护文档](docs/SQL_INJECTION_PROTECTION.md) - 所有SQL执行路径的安全检查清单
-- [权限控制模块](backend/app/core/permissions.py) - 细粒度权限控制实现
+
 
 ## 🤝 贡献
 
