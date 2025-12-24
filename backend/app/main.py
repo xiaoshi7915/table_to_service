@@ -18,7 +18,7 @@ from app.core.config import settings
 from app.core.database import Base, local_engine, test_local_connection
 from app.core.exceptions import BaseAPIException
 from app.api.v1 import api_router
-from app.api.v1 import auth, api_docs, interface_configs, interface_executor, database_configs, table_configs, interface_proxy, ai_models, terminologies, sql_examples, prompts, knowledge, chat, chat_schema, chat_recommendations, chat_export, dashboards, probe_tasks, probe_results, probe_export
+from app.api.v1 import auth, api_docs, interface_configs, interface_executor, database_configs, table_configs, interface_proxy, ai_models, terminologies, sql_examples, prompts, knowledge, chat, chat_schema, chat_recommendations, chat_export, dashboards, probe_tasks, probe_results, probe_export, documents
 
 # 配置日志
 logger.remove()
@@ -187,6 +187,10 @@ app.include_router(terminologies.router)  # 术语库
 app.include_router(sql_examples.router)  # SQL示例库
 app.include_router(prompts.router)  # 自定义提示词
 app.include_router(knowledge.router)  # 业务知识库
+app.include_router(documents.router)  # 文档管理
+from app.api.v1 import data_sources, cocoindex
+app.include_router(data_sources.router)  # 数据源管理
+app.include_router(cocoindex.router)  # CocoIndex管理
 app.include_router(chat.router)  # 对话API
 app.include_router(chat_schema.router)  # 对话Schema API
 app.include_router(chat_recommendations.router)  # 对话推荐API
@@ -196,6 +200,44 @@ app.include_router(probe_tasks.router)  # 探查任务API
 app.include_router(probe_results.router)  # 探查结果API
 app.include_router(probe_export.router)  # 探查结果导出API
 app.include_router(interface_proxy.router)  # 动态接口代理，必须最后注册
+
+
+# 启动时初始化 CocoIndex（如果启用）
+@app.on_event("startup")
+async def startup_cocoindex():
+    """启动时初始化 CocoIndex"""
+    try:
+        from app.core.cocoindex.config import cocoindex_config
+        from app.core.cocoindex.sync.scheduler import sync_scheduler
+        
+        # 验证配置
+        if cocoindex_config.validate_config():
+            logger.info("CocoIndex 配置验证通过")
+            
+            # 如果启用了同步，启动调度器
+            if cocoindex_config.SYNC_ENABLED:
+                try:
+                    sync_scheduler.start()
+                    logger.info("CocoIndex 同步调度器已启动")
+                except Exception as e:
+                    logger.warning(f"启动同步调度器失败: {e}")
+        else:
+            logger.warning("CocoIndex 配置验证失败，某些功能可能不可用")
+    except Exception as e:
+        logger.warning(f"CocoIndex 初始化失败: {e}")
+
+
+@app.on_event("shutdown")
+async def shutdown_cocoindex():
+    """关闭时清理 CocoIndex 资源"""
+    try:
+        from app.core.cocoindex.sync.scheduler import sync_scheduler
+        
+        if sync_scheduler.running:
+            sync_scheduler.stop()
+            logger.info("CocoIndex 同步调度器已停止")
+    except Exception as e:
+        logger.warning(f"CocoIndex 清理失败: {e}")
 
 logger.info("路由注册完成")
 
@@ -221,8 +263,42 @@ async def startup_event():
     else:
         logger.error("本地数据库连接失败")
     
+    # 初始化 CocoIndex（如果启用）
+    try:
+        from app.core.cocoindex.config import cocoindex_config
+        from app.core.cocoindex.sync.scheduler import sync_scheduler
+        
+        # 验证配置
+        if cocoindex_config.validate_config():
+            logger.info("CocoIndex 配置验证通过")
+            
+            # 如果启用了同步，启动调度器
+            if cocoindex_config.SYNC_ENABLED:
+                try:
+                    sync_scheduler.start()
+                    logger.info("CocoIndex 同步调度器已启动")
+                except Exception as e:
+                    logger.warning(f"启动同步调度器失败: {e}")
+        else:
+            logger.warning("CocoIndex 配置验证失败，某些功能可能不可用")
+    except Exception as e:
+        logger.warning(f"CocoIndex 初始化失败: {e}")
+    
     logger.info("服务运行在: http://{}:{}", settings.HOST, settings.PORT)
     logger.info("=" * 50)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用关闭事件"""
+    try:
+        from app.core.cocoindex.sync.scheduler import sync_scheduler
+        
+        if sync_scheduler.running:
+            sync_scheduler.stop()
+            logger.info("CocoIndex 同步调度器已停止")
+    except Exception as e:
+        logger.warning(f"CocoIndex 清理失败: {e}")
 
 
 # 根路径

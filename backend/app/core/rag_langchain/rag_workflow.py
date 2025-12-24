@@ -654,7 +654,8 @@ class RAGWorkflow:
         
         if not data:
             state["chart_config"] = None
-            state["explanation"] = "查询成功，但未返回数据"
+            # 返回0条数据时，生成更友好的解释
+            state["explanation"] = "✅ SQL查询执行成功，返回 0 条数据。这不是异常情况，表示在当前查询条件下确实没有匹配的数据记录。"
             return state
         
         # 使用图表服务生成配置

@@ -1091,26 +1091,67 @@ async def send_message(
                 except Exception as e:
                     logger.warning(f"创建检索器失败: {e}，将使用简化版本")
             
-            # 如果检索器创建失败，使用空检索器（降级方案）
+            # 如果检索器创建失败，尝试使用CocoIndex检索器（如果启用）
             if not terminology_retriever:
                 try:
                     from langchain_core.retrievers import BaseRetriever
                 except ImportError:
                     from langchain.schema import BaseRetriever
-            
-            class EmptyRetriever(BaseRetriever):
-                def _get_relevant_documents(self, query: str):
-                    return []
-                async def _aget_relevant_documents(self, query: str):
-                    return []
-                def get_relevant_documents(self, query: str):
-                    return []
-                async def aget_relevant_documents(self, query: str):
-                    return []
-            
-            terminology_retriever = EmptyRetriever()
-            sql_example_retriever = EmptyRetriever()
-            knowledge_retriever = EmptyRetriever()
+                
+                # 尝试使用CocoIndex检索器
+                from app.core.config import settings as app_settings
+                if app_settings.USE_COCOINDEX_RETRIEVER:
+                    try:
+                        from app.core.cocoindex.compat.adapter import CocoIndexRetrieverAdapter
+                        
+                        # 创建CocoIndex检索器适配器
+                        terminology_retriever = CocoIndexRetrieverAdapter(
+                            collection_name="terminologies",
+                            embedding_service=embedding_service,
+                            db_session=db
+                        )
+                        sql_example_retriever = CocoIndexRetrieverAdapter(
+                            collection_name="sql_examples",
+                            embedding_service=embedding_service,
+                            db_session=db
+                        )
+                        knowledge_retriever = CocoIndexRetrieverAdapter(
+                            collection_name="knowledge",
+                            embedding_service=embedding_service,
+                            db_session=db
+                        )
+                        logger.info("使用CocoIndex检索器")
+                    except Exception as e:
+                        logger.warning(f"创建CocoIndex检索器失败: {e}，使用空检索器")
+                        # 降级到空检索器
+                        class EmptyRetriever(BaseRetriever):
+                            def _get_relevant_documents(self, query: str):
+                                return []
+                            async def _aget_relevant_documents(self, query: str):
+                                return []
+                            def get_relevant_documents(self, query: str):
+                                return []
+                            async def aget_relevant_documents(self, query: str):
+                                return []
+                        
+                        terminology_retriever = EmptyRetriever()
+                        sql_example_retriever = EmptyRetriever()
+                        knowledge_retriever = EmptyRetriever()
+                else:
+                    # 使用空检索器（降级方案）
+                    class EmptyRetriever(BaseRetriever):
+                        def _get_relevant_documents(self, query: str):
+                            return []
+                        async def _aget_relevant_documents(self, query: str):
+                            return []
+                        def get_relevant_documents(self, query: str):
+                            return []
+                        async def aget_relevant_documents(self, query: str):
+                            return []
+                    
+                    terminology_retriever = EmptyRetriever()
+                    sql_example_retriever = EmptyRetriever()
+                    knowledge_retriever = EmptyRetriever()
         
             # 10. 创建RAG工作流
             rag_workflow = RAGWorkflow(
@@ -1453,20 +1494,21 @@ SQL执行失败，错误信息：{execution_error or error}
                         data_summary = None
                         recommended_questions = []
                         
-                        # 并行生成数据总结和推荐问题
-                        if data_list and len(data_list) > 0 and llm:
+                        # 并行生成数据总结和推荐问题（即使数据为空也要生成）
+                        if llm:
                             try:
+                                # 无论数据是否为空，都生成数据总结和推荐问题
                                 data_summary_task = asyncio.create_task(generate_data_summary(
                                     question=question,
                                     sql=sql,
-                                    data=data_list,
+                                    data=data_list if data_list else [],  # 即使为空也传递
                                     llm_client=llm
                                 ))
                                 recommended_questions_task = asyncio.create_task(generate_dynamic_recommendations(
                                     session_id=session_id,
                                     current_question=question,
                                     sql=sql,
-                                    data=data_list[:10] if data_list else None,
+                                    data=data_list[:10] if data_list and len(data_list) > 0 else None,
                                     db=background_db,
                                     current_user=current_user,
                                     selected_tables=selected_tables_list,
@@ -1489,8 +1531,10 @@ SQL执行失败，错误信息：{execution_error or error}
                                 if isinstance(recommended_questions, Exception):
                                     logger.warning(f"后台生成推荐问题失败: {recommended_questions}")
                                     recommended_questions = []
+                                elif recommended_questions:
+                                    logger.info(f"后台生成推荐问题成功，数量: {len(recommended_questions)}")
                             except Exception as e:
-                                logger.warning(f"后台生成数据总结和推荐问题失败: {e}")
+                                logger.warning(f"后台生成数据总结和推荐问题失败: {e}", exc_info=True)
                         
                         # 更新消息内容（添加数据总结）
                         if data_summary:
@@ -1532,12 +1576,13 @@ SQL执行失败，错误信息：{execution_error or error}
                 # 如果有未绑定参数且返回0条数据，无论explanation_content是否有值，都要更新为警告消息
                 explanation_content = f"⚠️ SQL查询执行成功，但检测到未绑定的参数: {', '.join(unbound_params)}。\n\n由于缺少这些参数值，系统已自动移除了相关的WHERE条件，导致查询结果可能不准确。\n\n**建议：**\n- 请提供完整的查询参数，或重新描述您的查询需求\n- 当前执行的SQL已移除了未绑定参数的条件"
                 logger.info(f"步骤2 - 检测到未绑定参数，更新explanation_content: {explanation_content[:200]}")
+            elif not data or len(data) == 0:
+                # 返回0条数据时，生成友好的解释（即使已有explanation也要更新）
+                explanation_content = "✅ SQL查询执行成功，返回 0 条数据。\n\n**说明：**\n这不是异常情况，表示在当前查询条件下确实没有匹配的数据记录。系统将在后台为您分析可能的原因，并提供下一步建议。"
+                logger.info(f"步骤2 - 返回0条数据，更新explanation_content: {explanation_content[:200]}")
             elif not explanation_content:
-                # 如果没有explanation，生成一个默认的
-                if data and len(data) > 0:
-                    explanation_content = f"✅ SQL查询执行成功，返回 {len(data)} 条数据"
-                else:
-                    explanation_content = "✅ SQL查询执行成功，查询结果为空（0条数据）。这是正常情况，表示当前查询条件下没有匹配的数据。"
+                # 如果有数据但没有explanation，生成一个默认的
+                explanation_content = f"✅ SQL查询执行成功，返回 {len(data)} 条数据"
                 logger.info(f"步骤2 - 生成默认explanation_content: {explanation_content[:200]}")
             
             # 注意：不再在这里添加data_summary，将在后台任务中添加
@@ -1575,17 +1620,21 @@ SQL执行失败，错误信息：{execution_error or error}
             db.refresh(assistant_message)
             
             # 启动后台任务更新消息（不阻塞主响应）
-            if data and len(data) > 0 and llm_client:
+            # 无论是否有数据，都启动后台任务（返回0条数据时也需要生成分析总结和推荐问题）
+            if llm_client:
                 asyncio.create_task(background_update_message(
                     message_id=assistant_message.id,
                     session_id=session_id,
                     question=request.question,
                     sql=final_sql,
-                    data_list=data,
+                    data_list=data if data else [],  # 即使为空也传递，让后台任务处理
                     selected_tables_list=selected_tables,
                     llm=llm_client
                 ))
-                logger.info(f"后台任务已启动：将在后台生成数据总结和推荐问题，消息ID: {assistant_message.id}")
+                if data and len(data) > 0:
+                    logger.info(f"后台任务已启动：将在后台生成数据总结和推荐问题，消息ID: {assistant_message.id}")
+                else:
+                    logger.info(f"后台任务已启动：将在后台分析返回0条数据的原因并生成推荐问题，消息ID: {assistant_message.id}")
             
             # 16. 延迟生成对话标题（不阻塞主流程）
             # 查询会话中的用户消息数量（不包括刚创建的用户消息）

@@ -88,7 +88,7 @@ def get_db() -> Generator[Session, None, None]:
     try:
         yield db
     except Exception as e:
-        logger.error("本地数据库会话错误: {}", e)
+        logger.error("本地数据库会话错误: {}", e, exc_info=True)
         db.rollback()
         raise
     finally:

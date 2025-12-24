@@ -98,6 +98,21 @@ const routes = [
         path: 'probe-result/:id',
         name: 'ProbeResult',
         component: () => import('@/views/ProbeResult.vue')
+      },
+      {
+        path: 'document-management',
+        name: 'DocumentManagement',
+        component: () => import('@/views/DocumentManagement.vue')
+      },
+      {
+        path: 'data-source-management',
+        name: 'DataSourceManagement',
+        component: () => import('@/views/DataSourceManagement.vue')
+      },
+      {
+        path: 'scheduler-config',
+        name: 'SchedulerConfig',
+        component: () => import('@/views/SchedulerConfig.vue')
       }
     ]
   }

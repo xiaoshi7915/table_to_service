@@ -76,6 +76,26 @@
             <span>历史对话</span>
           </el-menu-item>
         </el-sub-menu>
+        
+        <el-sub-menu index="cocoindex">
+          <template #title>
+            <el-icon><Files /></el-icon>
+            <span>同步任务配置</span>
+          </template>
+          <el-menu-item index="/document-management">
+            <el-icon><Document /></el-icon>
+            <span>文档管理</span>
+          </el-menu-item>
+          <el-menu-item index="/data-source-management">
+            <el-icon><Connection /></el-icon>
+            <span>数据源管理</span>
+          </el-menu-item>
+          <el-menu-item index="/scheduler-config">
+            <el-icon><Clock /></el-icon>
+            <span>定时任务配置</span>
+          </el-menu-item>
+        </el-sub-menu>
+        
         <el-menu-item index="/dashboard-list">
             <el-icon><DataBoard /></el-icon>
             <span>仪表板</span>
@@ -135,7 +155,10 @@ import {
   Collection,
   DocumentCopy,
   EditPen,
-  Reading
+  Reading,
+  Files,
+  Setting,
+  Clock
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
@@ -155,7 +178,10 @@ const pageTitle = computed(() => {
     '/terminology-config': '术语配置',
     '/sql-example-config': 'SQL示例配置',
     '/prompt-config': '自定义提示词',
-    '/knowledge-config': '业务知识库'
+    '/knowledge-config': '业务知识库',
+    '/document-management': '文档管理',
+    '/data-source-management': '数据源管理',
+    '/scheduler-config': '定时任务配置'
   }
   return titles[route.path] || '智能问数'
 })

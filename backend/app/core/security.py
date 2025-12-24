@@ -17,9 +17,9 @@ from loguru import logger
 # 密码加密上下文
 # 使用bcrypt，如果失败则使用sha256_crypt作为备选
 try:
+    import bcrypt
+    # 检查bcrypt是否可用（不进行实际哈希测试，避免passlib版本兼容性问题）
     pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    # 测试bcrypt是否可用
-    test_hash = pwd_context.hash("test")
 except Exception as e:
     logger.warning("bcrypt初始化失败，使用sha256_crypt: {}", e)
     pwd_context = CryptContext(schemes=["sha256_crypt"], deprecated="auto")

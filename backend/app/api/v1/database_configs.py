@@ -359,9 +359,8 @@ async def test_connection_direct(
                 conn.execute(text(test_sql))
             engine.dispose()
             
-            # 测试成功后，自动将配置设置为已激活
-            config.is_active = True
-            db.commit()
+            # 注意：这是直接测试连接，不需要保存配置或更新数据库
+            # 如果测试成功，直接返回成功消息
             
             return ResponseModel(
                 success=True,
@@ -370,7 +369,7 @@ async def test_connection_direct(
         except Exception as e:
             # 安全：记录错误时不包含密码信息
             logger.error("数据库连接测试失败 (用户: {}, 数据库类型: {}, 主机: {}): {}", 
-                        current_user.id, db_type, config_data.get("host", "N/A") if 'config_data' in locals() else config.host if 'config' in locals() else "N/A", str(e), exc_info=True)
+                        current_user.id, db_type, config_data.get("host", "N/A"), str(e), exc_info=True)
             
             # 解析错误信息，提供更友好的提示
             error_str = str(e)

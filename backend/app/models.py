@@ -6,6 +6,19 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
 
+# 尝试导入 pgvector 相关类型（如果可用）
+try:
+    from pgvector.sqlalchemy import Vector
+    PGVECTOR_AVAILABLE = True
+except ImportError:
+    # 如果 pgvector 不可用，使用 ARRAY 作为后备
+    try:
+        from sqlalchemy import ARRAY
+        PGVECTOR_AVAILABLE = False
+    except ImportError:
+        ARRAY = None
+        PGVECTOR_AVAILABLE = False
+
 
 class User(Base):
     """用户模型"""
@@ -277,6 +290,69 @@ class BusinessKnowledge(Base):
     creator = relationship("User", foreign_keys=[created_by])
 
 
+class Document(Base):
+    """文档模型"""
+    __tablename__ = "documents"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String(500), nullable=False, comment="文件名")
+    file_type = Column(String(50), nullable=True, comment="文件类型（pdf, doc, md, html等）")
+    file_path = Column(String(1000), nullable=True, comment="文件存储路径")
+    file_size = Column(Integer, nullable=True, comment="文件大小（字节）")
+    title = Column(String(500), nullable=True, comment="文档标题")
+    content_hash = Column(String(64), nullable=True, index=True, comment="内容哈希（用于去重）")
+    meta_data = Column(JSON, nullable=True, comment="扩展元数据（JSON格式）")
+    status = Column(String(20), default="pending", comment="状态（pending, processing, completed, failed）")
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, comment="创建人ID")
+    is_deleted = Column(Boolean, default=False, comment="是否已删除（软删除）")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
+    
+    # 关系
+    creator = relationship("User", foreign_keys=[created_by])
+    chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
+
+
+class DocumentChunk(Base):
+    """文档分块模型"""
+    __tablename__ = "document_chunks"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, comment="文档ID")
+    chunk_index = Column(Integer, nullable=False, comment="分块序号")
+    content = Column(Text, nullable=False, comment="分块内容")
+    meta_data = Column(JSON, nullable=True, comment="分块元数据（页码、章节等，JSON格式）")
+    # 向量字段：如果 pgvector 可用则使用 Vector，否则使用 ARRAY
+    if PGVECTOR_AVAILABLE:
+        embedding = Column(Vector(768), nullable=True, comment="向量嵌入（pgvector）")
+    else:
+        embedding = Column(ARRAY(Float), nullable=True, comment="向量嵌入（数组）")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
+    
+    # 关系
+    document = relationship("Document", back_populates="chunks")
+
+
+class DataSourceConfig(Base):
+    """数据源配置模型（用于CocoIndex多数据源管理）"""
+    __tablename__ = "data_source_configs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    source_type = Column(String(50), nullable=False, comment="数据源类型（postgresql, mysql, mongodb, s3, api等）")
+    name = Column(String(200), nullable=False, comment="数据源名称")
+    config = Column(JSON, nullable=False, comment="连接配置（JSON格式）")
+    sync_enabled = Column(Boolean, default=True, comment="是否启用同步")
+    sync_frequency = Column(Integer, nullable=True, comment="同步频率（秒）")
+    last_sync_at = Column(DateTime(timezone=True), nullable=True, comment="最后同步时间")
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, comment="创建人ID")
+    is_deleted = Column(Boolean, default=False, comment="是否已删除（软删除）")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
+    
+    # 关系
+    creator = relationship("User", foreign_keys=[created_by])
+
+
 class ChatSession(Base):
     """对话会话模型"""
     __tablename__ = "chat_sessions"
@@ -383,8 +459,8 @@ class ProbeTask(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
     
     # 关系
-    user = relationship("User", foreign_keys=[user_id])
-    database_config = relationship("DatabaseConfig", foreign_keys=[database_config_id])
+    user = relationship("User", foreign_keys=[user_id], overlaps="probe_tasks")
+    database_config = relationship("DatabaseConfig", foreign_keys=[database_config_id], overlaps="probe_tasks")
     database_results = relationship("ProbeDatabaseResult", back_populates="task", cascade="all, delete-orphan")
     table_results = relationship("ProbeTableResult", back_populates="task", cascade="all, delete-orphan")
     column_results = relationship("ProbeColumnResult", back_populates="task", cascade="all, delete-orphan")

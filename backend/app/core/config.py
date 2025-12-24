@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     DEBUG: bool = os.getenv("DEBUG", "False").lower() == "true"
     
     # CORS配置
-    ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8080,http://127.0.0.1:3000")
+    ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8080,http://127.0.0.1:3000,http://121.36.205.70:3003")
     
     # API服务地址配置（用于生成接口文档中的完整URL）
     API_SERVER_HOST: str = os.getenv("API_SERVER_HOST", "")  # 如果为空，则从请求头获取
@@ -76,6 +76,20 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE: int = int(os.getenv("DB_POOL_RECYCLE", "3600"))  # 连接回收时间（秒，默认1小时）
     LOCAL_DB_POOL_SIZE: int = int(os.getenv("LOCAL_DB_POOL_SIZE", "5"))  # 本地数据库连接池大小（默认5）
     LOCAL_DB_MAX_OVERFLOW: int = int(os.getenv("LOCAL_DB_MAX_OVERFLOW", "10"))  # 本地数据库最大溢出连接数（默认10）
+    
+    # CocoIndex 配置（文档存储和向量索引）
+    DOCUMENT_STORAGE_TYPE: str = os.getenv("DOCUMENT_STORAGE_TYPE", "local")  # local, s3, azure, gdrive
+    DOCUMENT_STORAGE_PATH: str = os.getenv("DOCUMENT_STORAGE_PATH", str(BACKEND_DIR.parent / "storage" / "documents"))
+    DOCUMENT_TEMP_PATH: str = os.getenv("DOCUMENT_TEMP_PATH", str(BACKEND_DIR.parent / "storage" / "temp"))
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "bge-base-zh-v1.5")  # 中文嵌入模型
+    EMBEDDING_DIMENSION: int = int(os.getenv("EMBEDDING_DIMENSION", "768"))  # 向量维度
+    MAX_FILE_SIZE: int = int(os.getenv("MAX_FILE_SIZE", "100")) * 1024 * 1024  # 最大文件大小（MB转字节，默认100MB）
+    CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "500"))  # 文档分块大小（tokens）
+    CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "50"))  # 分块重叠大小（tokens）
+    SYNC_ENABLED: bool = os.getenv("SYNC_ENABLED", "true").lower() == "true"
+    SYNC_INTERVAL: int = int(os.getenv("SYNC_INTERVAL", "60"))  # 默认同步间隔（秒）
+    CDC_ENABLED: bool = os.getenv("CDC_ENABLED", "true").lower() == "true"  # Change Data Capture
+    USE_COCOINDEX_RETRIEVER: bool = os.getenv("USE_COCOINDEX_RETRIEVER", "false").lower() == "true"  # 是否使用CocoIndex检索器
     
     @property
     def database_url(self) -> str:

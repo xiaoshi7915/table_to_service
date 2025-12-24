@@ -266,5 +266,107 @@ class LangChainLLMAdapter(BaseLanguageModel):
         except Exception as e:
             logger.error("invoke失败: %s", str(e), exc_info=True)
             return AIMessage(content=f"调用失败: {str(e)}")
+    
+    def predict(self, text: str, *, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+        """
+        同步预测文本（LangChain 抽象方法要求）
+        
+        Args:
+            text: 输入文本
+            stop: 停止词列表
+            **kwargs: 其他参数
+            
+        Returns:
+            预测的文本
+        """
+        try:
+            result = self._generate([text], stop=stop, **kwargs)
+            if result.generations and result.generations[0]:
+                return result.generations[0][0].text
+            return ""
+        except Exception as e:
+            logger.error("predict失败: %s", str(e), exc_info=True)
+            return f"预测失败: {str(e)}"
+    
+    async def apredict(self, text: str, *, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+        """
+        异步预测文本（LangChain 抽象方法要求）
+        
+        Args:
+            text: 输入文本
+            stop: 停止词列表
+            **kwargs: 其他参数
+            
+        Returns:
+            预测的文本
+        """
+        try:
+            result = await self._agenerate([text], stop=stop, **kwargs)
+            if result.generations and result.generations[0]:
+                return result.generations[0][0].text
+            return ""
+        except Exception as e:
+            logger.error("apredict失败: %s", str(e), exc_info=True)
+            return f"预测失败: {str(e)}"
+    
+    def predict_messages(
+        self,
+        messages: List[BaseMessage],
+        *,
+        stop: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> BaseMessage:
+        """
+        同步预测消息（LangChain 抽象方法要求）
+        
+        Args:
+            messages: 消息列表
+            stop: 停止词列表
+            **kwargs: 其他参数
+            
+        Returns:
+            AI消息
+        """
+        try:
+            # 将消息转换为文本
+            text = "\n".join([msg.content if hasattr(msg, 'content') else str(msg) for msg in messages])
+            result = self._generate([text], stop=stop, **kwargs)
+            if result.generations and result.generations[0]:
+                content = result.generations[0][0].text
+                return AIMessage(content=content)
+            return AIMessage(content="")
+        except Exception as e:
+            logger.error("predict_messages失败: %s", str(e), exc_info=True)
+            return AIMessage(content=f"预测失败: {str(e)}")
+    
+    async def apredict_messages(
+        self,
+        messages: List[BaseMessage],
+        *,
+        stop: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> BaseMessage:
+        """
+        异步预测消息（LangChain 抽象方法要求）
+        
+        Args:
+            messages: 消息列表
+            stop: 停止词列表
+            **kwargs: 其他参数
+            
+        Returns:
+            AI消息
+        """
+        try:
+            # 将消息转换为文本
+            text = "\n".join([msg.content if hasattr(msg, 'content') else str(msg) for msg in messages])
+            result = await self._agenerate([text], stop=stop, **kwargs)
+            if result.generations and result.generations[0]:
+                content = result.generations[0][0].text
+                return AIMessage(content=content)
+            return AIMessage(content="")
+        except Exception as e:
+            logger.error("apredict_messages失败: %s", str(e), exc_info=True)
+            return AIMessage(content=f"预测失败: {str(e)}")
 
 

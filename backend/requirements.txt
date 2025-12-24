@@ -1,14 +1,14 @@
 fastapi==0.104.1
-uvicorn[standard]==0.24.0
+uvicorn[standard]>=0.24.0
 sqlalchemy==2.0.23
 pymysql==1.1.0
 psycopg2-binary==2.9.9
 pyodbc==5.0.1
-python-dotenv==1.0.0
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-pydantic==2.5.0
-pydantic-settings==2.1.0
+python-dotenv>=1.0.0
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+pydantic>=2.5.0
+pydantic-settings>=2.1.0,<3.0.0
 loguru==0.7.2
 sqlparse==0.5.4
 slowapi==0.1.9
@@ -43,13 +43,44 @@ rank_bm25 # BM25检索器
 
 # 其他工具
 tenacity>=8.2.3,<9.0.0  # 重试库
-pydantic>=2.0  # 数据验证
-pydantic-settings>=2.2.1,<3.0.0  # 配置管理
+# pydantic>=2.0  # 数据验证（已在上面定义）
+# pydantic-settings>=2.2.1,<3.0.0  # 配置管理（已在上面定义）
 sqlmodel>=0.0.21,<1.0.0  # SQL模型
 alembic>=1.12.1,<2.0.0  # 数据库迁移
 
 # Redis缓存支持
 redis>=5.0.0,<6.0.0
+
+# CocoIndex 数据转换框架
+cocoindex>=0.3.20
+
+# 文档处理库
+pypdf>=3.17.0  # PDF 解析
+pdfplumber>=0.10.0  # PDF 解析（备用）
+PyMuPDF>=1.23.0  # PDF 解析（高性能）
+python-docx>=1.1.0  # Word 文档解析
+markdown>=3.5.0  # Markdown 解析
+mistune>=3.0.0  # Markdown 解析（备用）
+beautifulsoup4>=4.12.0  # HTML/网页解析
+readability-lxml>=0.8.1  # 网页内容提取
+Pillow>=10.0.0  # 图片处理
+pdf2image>=1.16.0  # PDF 转图片
+
+# 数据湖存储库
+boto3>=1.28.0  # AWS S3
+azure-storage-blob>=12.19.0  # Azure Blob Storage
+google-api-python-client>=2.100.0  # Google Drive API
+google-auth-httplib2>=0.1.1
+google-auth-oauthlib>=1.1.0
+
+# MongoDB 支持
+pymongo>=4.6.0  # MongoDB 驱动
+
+# 任务调度
+APScheduler>=3.10.0  # 定时任务调度
+
+# 文件系统监听（可选，用于文件变更监听）
+watchdog>=3.0.0  # 文件系统事件监听
 
 # 测试依赖
 pytest>=7.4.0
