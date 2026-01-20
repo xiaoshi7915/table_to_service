@@ -359,9 +359,8 @@ async def test_connection_direct(
                 conn.execute(text(test_sql))
             engine.dispose()
             
-            # 测试成功后，自动将配置设置为已激活
-            config.is_active = True
-            db.commit()
+            # 注意：这是直接测试连接，不需要保存配置到数据库
+            # 如果测试成功，直接返回成功消息即可
             
             return ResponseModel(
                 success=True,
@@ -369,8 +368,9 @@ async def test_connection_direct(
             )
         except Exception as e:
             # 安全：记录错误时不包含密码信息
+            host_info = config_data.get("host", "N/A") if config_data else "N/A"
             logger.error("数据库连接测试失败 (用户: {}, 数据库类型: {}, 主机: {}): {}", 
-                        current_user.id, db_type, config_data.get("host", "N/A") if 'config_data' in locals() else config.host if 'config' in locals() else "N/A", str(e), exc_info=True)
+                        current_user.id, db_type, host_info, str(e), exc_info=True)
             
             # 解析错误信息，提供更友好的提示
             error_str = str(e)
@@ -452,8 +452,9 @@ async def test_connection(
             )
         except Exception as e:
             # 安全：记录错误时不包含密码信息
+            host_info = config.host if config else "N/A"
             logger.error("数据库连接测试失败 (用户: {}, 数据库类型: {}, 主机: {}): {}", 
-                        current_user.id, db_type, config_data.get("host", "N/A") if 'config_data' in locals() else config.host if 'config' in locals() else "N/A", str(e), exc_info=True)
+                        current_user.id, db_type, host_info, str(e), exc_info=True)
             
             # 解析错误信息，提供更友好的提示
             error_str = str(e)
@@ -844,7 +845,29 @@ async def get_table_info(
         ).first()
         
         if not config:
-            raise HTTPException(status_code=404, detail="数据库配置不存在")
+            # 检查是否是软删除
+            deleted_config = db.query(DatabaseConfig).filter(
+                DatabaseConfig.id == config_id,
+                DatabaseConfig.is_deleted == True
+            ).first()
+            if deleted_config:
+                raise HTTPException(
+                    status_code=404, 
+                    detail=f"数据库配置 ID {config_id} 已被删除"
+                )
+            # 检查是否存在但属于其他用户
+            other_user_config = db.query(DatabaseConfig).filter(
+                DatabaseConfig.id == config_id
+            ).first()
+            if other_user_config:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"无权访问数据库配置 ID {config_id}（该配置属于其他用户）"
+                )
+            raise HTTPException(
+                status_code=404, 
+                detail=f"数据库配置 ID {config_id} 不存在"
+            )
         
         db_type = config.db_type or "mysql"
         adapter = SQLDialectFactory.get_adapter(db_type)
@@ -904,10 +927,54 @@ async def get_table_info(
                 # 其他数据库使用inspect
                 inspector = inspect(engine)
                 
+                # 先验证表是否存在
+                try:
+                    if db_type == "postgresql":
+                        existing_tables = inspector.get_table_names(schema='public')
+                    elif db_type == "sqlite":
+                        with engine.connect() as conn:
+                            result = conn.execute(text(
+                                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                            ))
+                            existing_tables = [row[0] for row in result]
+                    else:
+                        existing_tables = inspector.get_table_names()
+                    
+                    if table_name not in existing_tables:
+                        # 尝试大小写不敏感匹配（某些数据库表名大小写敏感）
+                        table_name_lower = table_name.lower()
+                        matching_table = next((t for t in existing_tables if t.lower() == table_name_lower), None)
+                        if matching_table:
+                            logger.warning(f"表名大小写不匹配: 请求 '{table_name}', 实际 '{matching_table}'")
+                            table_name = matching_table  # 使用正确的大小写
+                        else:
+                            raise HTTPException(
+                                status_code=404, 
+                                detail=f"表 '{table_name}' 不存在。数据库中共有 {len(existing_tables)} 个表。"
+                            )
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    logger.warning(f"验证表是否存在时出错，继续尝试获取表信息: {e}")
+                
                 # 获取列信息
                 try:
                     columns = inspector.get_columns(table_name)
+                    if not columns:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"表 '{table_name}' 不存在或无法访问"
+                        )
+                except HTTPException:
+                    raise
                 except Exception as e:
+                    error_str = str(e)
+                    # 检查是否是表不存在的错误
+                    if "does not exist" in error_str.lower() or "not found" in error_str.lower() or "不存在" in error_str:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"表 '{table_name}' 不存在: {error_str}"
+                        )
                     logger.error(f"获取列信息失败: {e}", exc_info=True)
                     raise HTTPException(status_code=400, detail=f"获取表列信息失败: {str(e)}")
                 

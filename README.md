@@ -202,6 +202,10 @@ table_to_service/
 - [管理员配置手册](docs/ADMIN_MANUAL.md) - 系统配置和管理指南
 - [API文档](http://121.36.205.70:8300/docs) - 在线API文档（Swagger UI）
 
+### 技术文档
+- [技术架构文档](docs/TECHNICAL_ARCHITECTURE.md) - 项目技术架构详解
+- [SQL元数据检索流程](docs/SQL_METADATA_RETRIEVAL_FLOW.md) - SQL元数据检索实现详解
+
 
 
 ## 🤝 贡献

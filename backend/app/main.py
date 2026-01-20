@@ -25,7 +25,8 @@ logger.remove()
 logger.add(
     sys.stdout,
     format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-    level="DEBUG" if settings.DEBUG else "INFO"
+    level="DEBUG" if settings.DEBUG else "INFO",
+    filter=lambda record: record["message"] is not None and isinstance(record["message"], str)  # 只记录字符串消息，过滤二进制数据
 )
 
 # 创建logs目录（如果不存在）

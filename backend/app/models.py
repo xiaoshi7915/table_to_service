@@ -383,8 +383,8 @@ class ProbeTask(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")
     
     # 关系
-    user = relationship("User", foreign_keys=[user_id])
-    database_config = relationship("DatabaseConfig", foreign_keys=[database_config_id])
+    user = relationship("User", foreign_keys=[user_id], overlaps="probe_tasks")
+    database_config = relationship("DatabaseConfig", foreign_keys=[database_config_id], overlaps="probe_tasks")
     database_results = relationship("ProbeDatabaseResult", back_populates="task", cascade="all, delete-orphan")
     table_results = relationship("ProbeTableResult", back_populates="task", cascade="all, delete-orphan")
     column_results = relationship("ProbeColumnResult", back_populates="task", cascade="all, delete-orphan")

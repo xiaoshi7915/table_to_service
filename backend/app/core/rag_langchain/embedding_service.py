@@ -10,9 +10,14 @@ try:
     from langchain_huggingface import HuggingFaceEmbeddings
     from langchain_core.embeddings import Embeddings
 except ImportError:
-    # LangChain 0.x (fallback)
-    from langchain_huggingface import HuggingFaceEmbeddings
-    from langchain.embeddings.base import Embeddings
+    try:
+        # LangChain 0.x (fallback)
+        from langchain_huggingface import HuggingFaceEmbeddings
+        from langchain.embeddings.base import Embeddings
+    except ImportError:
+        # 如果langchain_huggingface未安装，设置为None，后续会使用降级方案
+        HuggingFaceEmbeddings = None
+        Embeddings = None
 from loguru import logger
 
 # 配置 Hugging Face 镜像源（如果未设置环境变量）
@@ -38,6 +43,8 @@ class ChineseEmbeddingService:
             force_reload: 是否强制重新加载（默认False，使用单例）
         """
         self.model_name = model_name
+        if HuggingFaceEmbeddings is None:
+            raise ImportError("langchain_huggingface未安装，无法使用嵌入模型。请安装: pip install langchain-huggingface sentence-transformers")
         try:
             self.embeddings = HuggingFaceEmbeddings(
                 model_name=model_name,

@@ -123,7 +123,8 @@ start_backend() {
     cd "$BACKEND_DIR" || exit 1
     
     # 激活虚拟环境并启动服务（使用绝对路径确保正确）
-    nohup bash -c "cd '$BACKEND_DIR' && source venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8300 --reload" > "$LOG_FILE_BACKEND" 2>&1 &
+    # 注意：使用 tr 命令过滤掉 NUL 字符（\0），避免二进制数据污染日志文件
+    nohup bash -c "cd '$BACKEND_DIR' && source venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8300 --reload 2>&1 | tr -d '\0' > '$LOG_FILE_BACKEND'" &
     local pid=$!
     echo $pid > "$PID_FILE_BACKEND"
     

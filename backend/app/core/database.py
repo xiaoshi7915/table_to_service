@@ -88,7 +88,9 @@ def get_db() -> Generator[Session, None, None]:
     try:
         yield db
     except Exception as e:
-        logger.error("本地数据库会话错误: {}", e)
+        # 确保错误信息不为空
+        error_msg = str(e) if e and str(e) else (repr(e) if e else type(e).__name__ if e else "Unknown error")
+        logger.error("本地数据库会话错误: {}", error_msg, exc_info=True)
         db.rollback()
         raise
     finally:
@@ -110,7 +112,9 @@ def get_target_db() -> Generator[Session, None, None]:
     try:
         yield db
     except Exception as e:
-        logger.error("目标数据库会话错误: {}", e)
+        # 确保错误信息不为空
+        error_msg = str(e) if e and str(e) else (repr(e) if e else type(e).__name__ if e else "Unknown error")
+        logger.error("目标数据库会话错误: {}", error_msg, exc_info=True)
         db.rollback()
         raise
     finally:
@@ -127,7 +131,9 @@ def get_db_context() -> Generator[Session, None, None]:
         yield db
         db.commit()
     except Exception as e:
-        logger.error("数据库会话错误: {}", e)
+        # 确保错误信息不为空
+        error_msg = str(e) if e and str(e) else (repr(e) if e else type(e).__name__ if e else "Unknown error")
+        logger.error("数据库会话错误: {}", error_msg, exc_info=True)
         db.rollback()
         raise
     finally:

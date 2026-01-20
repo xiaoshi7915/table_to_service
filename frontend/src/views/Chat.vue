@@ -904,6 +904,16 @@ const loadTableFields = async (tableName) => {
   } catch (error) {
     console.error(`❌ 加载表 ${tableName} 字段信息失败:`, error)
     tableFieldsCache.value[tableName] = { loading: false, columns: null }
+    
+    // 如果是404错误，可能是数据库配置不存在或表不存在
+    if (error.response?.status === 404) {
+      const errorMsg = error.response?.data?.detail || error.response?.data?.message || '表不存在或数据库配置不存在'
+      console.warn(`⚠️ 表 ${tableName} 信息获取失败 (404): ${errorMsg}`)
+      // 不显示错误提示，因为这只是悬停提示功能，不影响主流程
+    } else {
+      // 其他错误也静默处理，避免干扰用户体验
+      console.warn(`⚠️ 表 ${tableName} 字段信息加载失败:`, error.message || error)
+    }
   }
 }
 
