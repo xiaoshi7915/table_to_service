@@ -14,8 +14,20 @@ export default defineConfig({
     host: '0.0.0.0',  // 允许外部访问
     port: 3003,
     hmr: {
-      clientPort: 3003
+      // 通过nginx代理时，HMR应该使用当前页面的协议和主机
+      // 当通过HTTPS访问时，HMR会自动使用WSS协议并通过nginx代理
+      // 设置host为当前域名，让HMR通过nginx代理而不是直接连接3003端口
+      host: 'wenshu.chenxiaoshivivid.top',
+      // 不指定clientPort，让Vite根据当前页面的协议自动选择（HTTP使用3003，HTTPS使用443）
+      // 当通过HTTPS访问时，HMR会通过nginx代理，不会直接连接3003端口
     },
+    // 允许的域名列表（用于通过nginx反向代理访问）
+    allowedHosts: [
+      'localhost',
+      '127.0.0.1',
+      'wenshu.chenxiaoshivivid.top',
+      '121.36.205.70'
+    ],
     proxy: {
       '/api': {
         target: 'http://localhost:8300',

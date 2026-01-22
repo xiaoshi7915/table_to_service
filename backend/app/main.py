@@ -219,6 +219,14 @@ async def startup_event():
             logger.info("数据库表创建/检查完成")
         except Exception as e:
             logger.error("数据库表创建失败: {}", e)
+        
+        # 执行自动迁移（检查并添加缺失的字段）
+        try:
+            from app.core.migrations import run_all_migrations
+            run_all_migrations()
+        except Exception as e:
+            logger.error("数据库自动迁移失败: {}", e)
+            # 不中断启动，只记录错误
     else:
         logger.error("本地数据库连接失败")
     

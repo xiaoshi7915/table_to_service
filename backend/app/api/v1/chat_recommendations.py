@@ -109,7 +109,9 @@ async def get_recommended_questions(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"获取推荐问题失败: {e}", exc_info=True)
+        # 使用 % 格式化避免异常信息中的花括号导致 KeyError
+        error_msg = str(e).replace("{", "{{").replace("}", "}}")
+        logger.error("获取推荐问题失败: %s", error_msg, exc_info=True)
         raise HTTPException(status_code=500, detail=f"获取推荐问题失败: {str(e)}")
 
 
@@ -336,7 +338,9 @@ async def generate_dynamic_recommendations(
                     logger.warning("LLM返回内容为空，使用规则生成")
                     
             except Exception as e:
-                logger.warning(f"使用LLM生成推荐问题失败: {e}，将使用规则生成")
+                # 使用 % 格式化避免异常信息中的花括号导致 KeyError
+                error_msg = str(e).replace("{", "{{").replace("}", "}}")
+                logger.warning("使用LLM生成推荐问题失败: %s，将使用规则生成", error_msg)
         
         # 5. 去重并限制数量
         unique_recommendations = []
@@ -351,7 +355,9 @@ async def generate_dynamic_recommendations(
         return unique_recommendations[:3]
         
     except Exception as e:
-        logger.error(f"生成动态推荐问题失败: {e}", exc_info=True)
+        # 使用 % 格式化避免异常信息中的花括号导致 KeyError
+        error_msg = str(e).replace("{", "{{").replace("}", "}}")
+        logger.error("生成动态推荐问题失败: %s", error_msg, exc_info=True)
         # 返回空列表，不抛出异常
         return []
 

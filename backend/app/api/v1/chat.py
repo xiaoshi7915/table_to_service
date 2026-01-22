@@ -88,7 +88,9 @@ async def generate_session_title(
         logger.info(f"自动生成对话标题: {generated_title} (会话ID: {session.id})")
         
     except Exception as e:
-        logger.error(f"生成对话标题失败: {e}", exc_info=True)
+        # 使用 % 格式化避免异常信息中的花括号导致 KeyError
+        error_msg = str(e).replace("{", "{{").replace("}", "}}")
+        logger.error("生成对话标题失败: %s", error_msg, exc_info=True)
         # 生成失败时，使用问题作为标题（截取前20个字符）
         if len(first_question) <= 20:
             session.title = first_question
@@ -228,7 +230,9 @@ async def generate_data_summary(
             return None
             
     except Exception as e:
-        logger.warning(f"生成数据总结失败: {e}，不影响主流程")
+        # 使用 % 格式化避免异常信息中的花括号导致 KeyError
+        error_msg = str(e).replace("{", "{{").replace("}", "}}")
+        logger.warning("生成数据总结失败: %s，不影响主流程", error_msg)
         return None
 
 
@@ -335,7 +339,9 @@ async def create_session(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"创建会话失败: {e}", exc_info=True)
+        # 使用 % 格式化避免异常信息中的花括号导致 KeyError
+        error_msg = str(e).replace("{", "{{").replace("}", "}}")
+        logger.error("创建会话失败: %s", error_msg, exc_info=True)
         raise HTTPException(status_code=500, detail=f"创建会话失败: {str(e)}")
 
 
@@ -448,7 +454,9 @@ async def list_sessions(
         )
         
     except Exception as e:
-        logger.error(f"获取会话列表失败: {e}", exc_info=True)
+        # 使用 % 格式化避免异常信息中的花括号导致 KeyError
+        error_msg = str(e).replace("{", "{{").replace("}", "}}")
+        logger.error("获取会话列表失败: %s", error_msg, exc_info=True)
         raise HTTPException(status_code=500, detail=f"获取会话列表失败: {str(e)}")
 
 
@@ -572,7 +580,9 @@ async def get_session(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"获取会话详情失败: {e}", exc_info=True)
+        # 使用 % 格式化避免异常信息中的花括号导致 KeyError
+        error_msg = str(e).replace("{", "{{").replace("}", "}}")
+        logger.error("获取会话详情失败: %s", error_msg, exc_info=True)
         raise HTTPException(status_code=500, detail=f"获取会话详情失败: {str(e)}")
 
 
@@ -628,7 +638,9 @@ async def update_session(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"更新会话失败: {e}", exc_info=True)
+        # 使用 % 格式化避免异常信息中的花括号导致 KeyError
+        error_msg = str(e).replace("{", "{{").replace("}", "}}")
+        logger.error("更新会话失败: %s", error_msg, exc_info=True)
         raise HTTPException(status_code=500, detail=f"更新会话失败: {str(e)}")
 
 
@@ -662,7 +674,9 @@ async def delete_session(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"删除会话失败: {e}", exc_info=True)
+        # 使用 % 格式化避免异常信息中的花括号导致 KeyError
+        error_msg = str(e).replace("{", "{{").replace("}", "}}")
+        logger.error("删除会话失败: %s", error_msg, exc_info=True)
         raise HTTPException(status_code=500, detail=f"删除会话失败: {str(e)}")
 
 
@@ -703,7 +717,9 @@ async def batch_delete_sessions(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"批量删除会话失败: {e}", exc_info=True)
+        # 使用 % 格式化避免异常信息中的花括号导致 KeyError
+        error_msg = str(e).replace("{", "{{").replace("}", "}}")
+        logger.error("批量删除会话失败: %s", error_msg, exc_info=True)
         raise HTTPException(status_code=500, detail=f"批量删除会话失败: {str(e)}")
 
 
@@ -1272,7 +1288,9 @@ async def send_message(
                         execution_error = error
                         data = []
                 except Exception as e:
-                    logger.error(f"执行用户编辑的SQL失败: {e}", exc_info=True)
+                    # 使用 % 格式化避免异常信息中的花括号导致 KeyError
+                    error_msg = str(e).replace("{", "{{").replace("}", "}}")
+                    logger.error("执行用户编辑的SQL失败: %s", error_msg, exc_info=True)
                     error = str(e)
                     execution_error = error
                     data = []
@@ -1519,7 +1537,9 @@ SQL执行失败，错误信息：{execution_error or error}
                     finally:
                         background_db.close()
                 except Exception as e:
-                    logger.error(f"后台更新消息失败: {e}", exc_info=True)
+                    # 使用 % 格式化避免异常信息中的花括号导致 KeyError
+                    error_msg = str(e).replace("{", "{{").replace("}", "}}")
+                    logger.error("后台更新消息失败: %s", error_msg, exc_info=True)
             
             # 15. 保存AI回复（不包含数据总结，数据总结将在后台任务中添加）
             logger.info(f"准备保存AI回复: workflow_result存在={workflow_result is not None}, data长度={len(data) if data else 0}, error={error}, execution_error={execution_error}, unbound_params={unbound_params}")
@@ -1624,7 +1644,9 @@ SQL执行失败，错误信息：{execution_error or error}
                         finally:
                             db_session.close()
                     except Exception as e:
-                        logger.warning(f"自动生成对话标题失败: {e}，保留原标题", exc_info=True)
+                        # 使用 % 格式化避免异常信息中的花括号导致 KeyError
+                        error_msg = str(e).replace("{", "{{").replace("}", "}}")
+                        logger.warning("自动生成对话标题失败: %s，保留原标题", error_msg, exc_info=True)
                 
                 # 不等待，让它在后台执行
                 asyncio.create_task(generate_title_background())
@@ -1820,6 +1842,8 @@ async def get_messages(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"获取消息列表失败: {e}", exc_info=True)
+        # 使用 % 格式化避免异常信息中的花括号导致 KeyError
+        error_msg = str(e).replace("{", "{{").replace("}", "}}")
+        logger.error("获取消息列表失败: %s", error_msg, exc_info=True)
         raise HTTPException(status_code=500, detail=f"获取消息列表失败: {str(e)}")
 
