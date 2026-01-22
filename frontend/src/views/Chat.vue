@@ -220,7 +220,7 @@
                   </el-alert>
                   
                   <!-- 错误时也显示推荐问题 -->
-                  <div v-if="message.recommended_questions && message.recommended_questions.length > 0" class="recommended-questions-section" style="margin-top: 12px">
+                  <div v-if="message.recommended_questions && Array.isArray(message.recommended_questions) && message.recommended_questions.length > 0" class="recommended-questions-section" style="margin-top: 12px">
                     <div class="recommended-questions-header">
                       <el-icon><ChatLineRound /></el-icon>
                       <span>猜你想问</span>
@@ -313,7 +313,7 @@
               </div>
               
               <!-- 推荐问题（显示在AI回复下方，基于当前会话上下文） -->
-              <div v-if="message.recommended_questions && message.recommended_questions.length > 0" class="recommended-questions-section">
+              <div v-if="message.recommended_questions && Array.isArray(message.recommended_questions) && message.recommended_questions.length > 0" class="recommended-questions-section">
                 <div class="recommended-questions-header">
                   <el-icon><ChatLineRound /></el-icon>
                   <span>猜你想问</span>
@@ -693,8 +693,21 @@ const loadMessages = async (sessionId) => {
           msg.chart_type = msg.chart_config.type || 'table'
           msg.columns = msg.chart_config.columns || Object.keys(msg.data?.[0] || {})
         }
-        // 确保推荐问题字段存在（如果没有则初始化为空数组）
+        // 确保推荐问题字段存在且为数组（如果没有则初始化为空数组）
+        // 处理可能的情况：undefined, null, 字符串（JSON格式）, 非数组
         if (!msg.recommended_questions) {
+          msg.recommended_questions = []
+        } else if (typeof msg.recommended_questions === 'string') {
+          // 如果是字符串，尝试解析JSON
+          try {
+            const parsed = JSON.parse(msg.recommended_questions)
+            msg.recommended_questions = Array.isArray(parsed) ? parsed : []
+          } catch (e) {
+            console.warn('解析推荐问题JSON失败:', e)
+            msg.recommended_questions = []
+          }
+        } else if (!Array.isArray(msg.recommended_questions)) {
+          // 如果不是数组，初始化为空数组
           msg.recommended_questions = []
         }
         // 确保contains_complex_sql字段存在
@@ -1293,11 +1306,28 @@ const sendMessage = async () => {
       }
       
       // 将推荐问题和复杂SQL标记保存到对应的AI回复消息中
-      if (response.data?.recommended_questions && response.data.recommended_questions.length > 0) {
-        // 找到最后一条AI回复消息并添加推荐问题
-        const lastAssistantMessage = messages.value.filter(m => m.role === 'assistant').pop()
-        if (lastAssistantMessage) {
-          lastAssistantMessage.recommended_questions = response.data.recommended_questions
+      // 确保 recommended_questions 是数组
+      const recommendedQuestions = response.data?.recommended_questions
+      if (recommendedQuestions) {
+        let questionsArray = []
+        if (Array.isArray(recommendedQuestions)) {
+          questionsArray = recommendedQuestions
+        } else if (typeof recommendedQuestions === 'string') {
+          try {
+            const parsed = JSON.parse(recommendedQuestions)
+            questionsArray = Array.isArray(parsed) ? parsed : []
+          } catch (e) {
+            console.warn('解析推荐问题JSON失败:', e)
+            questionsArray = []
+          }
+        }
+        
+        if (questionsArray.length > 0) {
+          // 找到最后一条AI回复消息并添加推荐问题
+          const lastAssistantMessage = messages.value.filter(m => m.role === 'assistant').pop()
+          if (lastAssistantMessage) {
+            lastAssistantMessage.recommended_questions = questionsArray
+          }
         }
       }
       
@@ -1394,11 +1424,26 @@ const startPollingForRecommendedQuestions = (messageId) => {
       
       // 查找对应的消息
       const message = messages.value.find(m => m.id === messageId)
-      if (message && message.recommended_questions && message.recommended_questions.length > 0) {
-        // 找到推荐问题，停止轮询
-        clearInterval(pollingTimer.value)
-        pollingTimer.value = null
-        return
+      if (message && message.recommended_questions) {
+        // 确保 recommended_questions 是数组
+        let questionsArray = []
+        if (Array.isArray(message.recommended_questions)) {
+          questionsArray = message.recommended_questions
+        } else if (typeof message.recommended_questions === 'string') {
+          try {
+            const parsed = JSON.parse(message.recommended_questions)
+            questionsArray = Array.isArray(parsed) ? parsed : []
+          } catch (e) {
+            questionsArray = []
+          }
+        }
+        
+        if (questionsArray.length > 0) {
+          // 找到推荐问题，停止轮询
+          clearInterval(pollingTimer.value)
+          pollingTimer.value = null
+          return
+        }
       }
       
       // 如果达到最大轮询次数，停止轮询

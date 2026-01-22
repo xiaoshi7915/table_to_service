@@ -266,5 +266,147 @@ class LangChainLLMAdapter(BaseLanguageModel):
         except Exception as e:
             logger.error("invoke失败: %s", str(e), exc_info=True)
             return AIMessage(content=f"调用失败: {str(e)}")
+    
+    def predict(self, text: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+        """
+        LangChain 0.x 要求的 predict 方法（同步）
+        
+        Args:
+            text: 输入文本
+            stop: 停止词列表
+            **kwargs: 其他参数
+            
+        Returns:
+            生成的文本
+        """
+        try:
+            messages = [{"role": "user", "content": text}]
+            llm_client = getattr(self, '_llm_client', None)
+            if not llm_client:
+                return "LLM客户端未初始化"
+            
+            response = self._call_sync(messages)
+            
+            if isinstance(response, dict):
+                return response.get("content", "")
+            else:
+                return str(response)
+        except Exception as e:
+            logger.error("predict失败: %s", str(e), exc_info=True)
+            return f"预测失败: {str(e)}"
+    
+    async def apredict(self, text: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+        """
+        LangChain 0.x 要求的 apredict 方法（异步）
+        
+        Args:
+            text: 输入文本
+            stop: 停止词列表
+            **kwargs: 其他参数
+            
+        Returns:
+            生成的文本
+        """
+        try:
+            messages = [{"role": "user", "content": text}]
+            llm_client = getattr(self, '_llm_client', None)
+            if not llm_client:
+                return "LLM客户端未初始化"
+            
+            response = await llm_client.chat_completion(messages)
+            
+            if isinstance(response, dict):
+                return response.get("content", "")
+            else:
+                return str(response)
+        except Exception as e:
+            logger.error("apredict失败: %s", str(e), exc_info=True)
+            return f"异步预测失败: {str(e)}"
+    
+    def predict_messages(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> BaseMessage:
+        """
+        LangChain 1.x 要求的 predict_messages 方法（同步）
+        
+        Args:
+            messages: 消息列表
+            stop: 停止词列表
+            **kwargs: 其他参数
+            
+        Returns:
+            AIMessage对象
+        """
+        try:
+            # 将LangChain消息转换为我们的格式
+            formatted_messages = []
+            for msg in messages:
+                if hasattr(msg, 'content'):
+                    role = "user"
+                    if isinstance(msg, AIMessage):
+                        role = "assistant"
+                    formatted_messages.append({"role": role, "content": msg.content})
+            
+            llm_client = getattr(self, '_llm_client', None)
+            if not llm_client:
+                return AIMessage(content="LLM客户端未初始化")
+            
+            response = self._call_sync(formatted_messages)
+            
+            if isinstance(response, dict):
+                content = response.get("content", "")
+            else:
+                content = str(response)
+            
+            return AIMessage(content=content)
+        except Exception as e:
+            logger.error("predict_messages失败: %s", str(e), exc_info=True)
+            return AIMessage(content=f"预测消息失败: {str(e)}")
+    
+    async def apredict_messages(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> BaseMessage:
+        """
+        LangChain 1.x 要求的 apredict_messages 方法（异步）
+        
+        Args:
+            messages: 消息列表
+            stop: 停止词列表
+            **kwargs: 其他参数
+            
+        Returns:
+            AIMessage对象
+        """
+        try:
+            # 将LangChain消息转换为我们的格式
+            formatted_messages = []
+            for msg in messages:
+                if hasattr(msg, 'content'):
+                    role = "user"
+                    if isinstance(msg, AIMessage):
+                        role = "assistant"
+                    formatted_messages.append({"role": role, "content": msg.content})
+            
+            llm_client = getattr(self, '_llm_client', None)
+            if not llm_client:
+                return AIMessage(content="LLM客户端未初始化")
+            
+            response = await llm_client.chat_completion(formatted_messages)
+            
+            if isinstance(response, dict):
+                content = response.get("content", "")
+            else:
+                content = str(response)
+            
+            return AIMessage(content=content)
+        except Exception as e:
+            logger.error("apredict_messages失败: %s", str(e), exc_info=True)
+            return AIMessage(content=f"异步预测消息失败: {str(e)}")
 
 

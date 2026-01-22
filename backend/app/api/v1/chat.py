@@ -1280,7 +1280,48 @@ async def send_message(
                         # 设置workflow_result，确保后续流程能正常工作
                         if not workflow_result:
                             workflow_result = {}
-                        workflow_result["explanation"] = f"用户编辑的SQL执行成功，返回 {len(data)} 条数据" if data else "用户编辑的SQL执行成功，但未返回数据"
+                        if data and len(data) > 0:
+                            workflow_result["explanation"] = f"✅ SQL查询执行成功，返回 {len(data)} 条数据。"
+                        else:
+                            # 无数据时，生成详细分析
+                            try:
+                                analysis_prompt = f"""你是一个数据分析助手。用户执行了以下SQL查询，查询执行成功但返回了0条数据。
+
+用户问题：{request.question}
+执行的SQL：
+```sql
+{final_sql}
+```
+
+请分析查询结果为空（0条数据）的可能原因，并给出简洁明了的说明。要求：
+1. 如实告知查询结果：查询执行成功，返回0条数据
+2. 分析可能的原因（例如：查询条件过于严格、数据确实不存在、字段值不匹配等）
+3. 用简洁明了的语言，直接回答用户的问题
+4. 不要包含"总结"、"分析"等前缀词
+5. 长度控制在100-150字
+
+说明："""
+                                
+                                analysis_messages = [{"role": "user", "content": analysis_prompt}]
+                                analysis_response = await llm_client.chat_completion(
+                                    messages=analysis_messages,
+                                    temperature=0.7,
+                                    max_tokens=300
+                                )
+                                
+                                if isinstance(analysis_response, dict):
+                                    analysis_text = analysis_response.get("content", "").strip() or analysis_response.get("message", {}).get("content", "").strip()
+                                else:
+                                    analysis_text = str(analysis_response).strip()
+                                
+                                if analysis_text and len(analysis_text) > 20:
+                                    workflow_result["explanation"] = f"✅ SQL查询执行成功，返回 0 条数据。\n\n**结果分析：**\n{analysis_text}"
+                                else:
+                                    workflow_result["explanation"] = f"✅ SQL查询执行成功，返回 0 条数据。\n\n**可能的原因：**\n- 当前查询条件下没有匹配的数据记录\n- 查询条件可能过于严格\n- 相关数据可能尚未录入系统"
+                            except Exception as e:
+                                error_msg = str(e).replace("{", "{{").replace("}", "}}")
+                                logger.warning(f"生成查询结果分析失败: {error_msg}")
+                                workflow_result["explanation"] = f"✅ SQL查询执行成功，返回 0 条数据。\n\n**可能的原因：**\n- 当前查询条件下没有匹配的数据记录\n- 查询条件可能过于严格\n- 相关数据可能尚未录入系统"
                         workflow_result["data"] = data
                         workflow_result["chart_config"] = chart_config
                     else:
@@ -1552,13 +1593,78 @@ SQL执行失败，错误信息：{execution_error or error}
                 # 如果有未绑定参数且返回0条数据，无论explanation_content是否有值，都要更新为警告消息
                 explanation_content = f"⚠️ SQL查询执行成功，但检测到未绑定的参数: {', '.join(unbound_params)}。\n\n由于缺少这些参数值，系统已自动移除了相关的WHERE条件，导致查询结果可能不准确。\n\n**建议：**\n- 请提供完整的查询参数，或重新描述您的查询需求\n- 当前执行的SQL已移除了未绑定参数的条件"
                 logger.info(f"步骤2 - 检测到未绑定参数，更新explanation_content: {explanation_content[:200]}")
-            elif not explanation_content:
-                # 如果没有explanation，生成一个默认的
-                if data and len(data) > 0:
-                    explanation_content = f"✅ SQL查询执行成功，返回 {len(data)} 条数据"
+            elif not data or len(data) == 0:
+                # 数据为空时，无论是否有explanation，都要生成详细分析
+                # 如果已有explanation但不够详细（只包含"查询成功"、"未返回数据"等简单描述），则生成新的分析
+                needs_analysis = True
+                if explanation_content:
+                    # 检查现有explanation是否已经包含分析内容
+                    simple_patterns = ["查询成功", "未返回数据", "返回0条", "结果为空", "没有数据"]
+                    has_analysis = any(keyword in explanation_content for keyword in ["原因", "分析", "可能", "条件", "WHERE"])
+                    if has_analysis or len(explanation_content) > 100:
+                        # 如果已有详细分析，使用现有内容
+                        needs_analysis = False
+                        logger.info(f"步骤2 - 现有explanation已包含分析，保留: {explanation_content[:200]}")
+                
+                if needs_analysis:
+                    # 无数据时，使用LLM分析原因（同步生成，确保用户能立即看到分析）
+                    try:
+                        # 构建分析提示词
+                        analysis_prompt = f"""你是一个数据分析助手。用户执行了以下SQL查询，查询执行成功但返回了0条数据。
+
+用户问题：{request.question}
+执行的SQL：
+```sql
+{final_sql}
+```
+
+请分析查询结果为空（0条数据）的可能原因，并给出简洁明了的说明。要求：
+1. 如实告知查询结果：查询执行成功，返回0条数据
+2. 分析可能的原因（例如：查询条件过于严格、数据确实不存在、字段值不匹配等）
+3. 用简洁明了的语言，直接回答用户的问题
+4. 不要包含"总结"、"分析"等前缀词
+5. 长度控制在100-150字
+6. 如果SQL中有明显的条件（如WHERE子句），可以说明这些条件可能导致结果为空
+
+说明："""
+                        
+                        # 调用LLM生成分析
+                        analysis_messages = [{"role": "user", "content": analysis_prompt}]
+                        analysis_response = await llm_client.chat_completion(
+                            messages=analysis_messages,
+                            temperature=0.7,
+                            max_tokens=300
+                        )
+                        
+                        if isinstance(analysis_response, dict):
+                            analysis_text = analysis_response.get("content", "").strip() or analysis_response.get("message", {}).get("content", "").strip()
+                        else:
+                            analysis_text = str(analysis_response).strip()
+                        
+                        if analysis_text and len(analysis_text) > 20:
+                            explanation_content = f"✅ SQL查询执行成功，返回 0 条数据。\n\n**结果分析：**\n{analysis_text}"
+                        else:
+                            # 如果LLM生成失败，使用默认分析
+                            explanation_content = f"✅ SQL查询执行成功，返回 0 条数据。\n\n**可能的原因：**\n- 当前查询条件下没有匹配的数据记录\n- 查询条件可能过于严格（如WHERE子句中的条件）\n- 相关数据可能尚未录入系统\n\n这是正常情况，表示根据您提供的查询条件，数据库中暂时没有符合条件的数据。"
+                        logger.info(f"步骤2 - 生成数据为空的分析: {explanation_content[:200]}")
+                    except Exception as e:
+                        # LLM分析失败时，使用默认说明
+                        error_msg = str(e).replace("{", "{{").replace("}", "}}")
+                        logger.warning(f"生成查询结果分析失败: {error_msg}，使用默认说明")
+                        explanation_content = f"✅ SQL查询执行成功，返回 0 条数据。\n\n**可能的原因：**\n- 当前查询条件下没有匹配的数据记录\n- 查询条件可能过于严格（如WHERE子句中的条件）\n- 相关数据可能尚未录入系统\n\n这是正常情况，表示根据您提供的查询条件，数据库中暂时没有符合条件的数据。"
+            elif data and len(data) > 0:
+                # 有数据时，如实告知结果
+                if not explanation_content:
+                    explanation_content = f"✅ SQL查询执行成功，返回 {len(data)} 条数据。"
                 else:
-                    explanation_content = "✅ SQL查询执行成功，查询结果为空（0条数据）。这是正常情况，表示当前查询条件下没有匹配的数据。"
-                logger.info(f"步骤2 - 生成默认explanation_content: {explanation_content[:200]}")
+                    # 如果已有explanation，确保包含数据条数信息
+                    if f"{len(data)} 条数据" not in explanation_content and "返回" not in explanation_content:
+                        explanation_content = f"{explanation_content}\n\n✅ 查询执行成功，返回 {len(data)} 条数据。"
+                logger.info(f"步骤2 - 有数据时的explanation_content: {explanation_content[:200] if explanation_content else 'None'}")
+            elif not explanation_content:
+                # 如果既没有数据也没有explanation，生成默认说明
+                explanation_content = "✅ SQL查询执行成功。"
+                logger.info(f"步骤2 - 生成默认explanation_content: {explanation_content}")
             
             # 注意：不再在这里添加data_summary，将在后台任务中添加
             # if data_summary:
